@@ -58,6 +58,7 @@ def _format_signal_message(
     ai_prob: float,
     sport_key: str,
     opp_type: str,
+    platform: str = "market",
 ) -> str:
     """Format a rich Telegram message for a value bet signal."""
     stake_url = _build_stake_link(sport_key)
@@ -76,17 +77,17 @@ def _format_signal_message(
         f"⚽ *{home_team}* vs *{away_team}*",
         "",
         f"{emoji} *Prediksi: {label}*",
-        f"💰 Odds Stake  : `{odds:.2f}`",
-        f"📊 Peluang AI  : `{ai_pct:.1f}%`",
-        f"📉 Peluang Tersirat: `{implied_pct:.1f}%`",
-        f"📈 Keunggulan (Edge): `+{edge_pct:.1f}%`",
+        f"💰 Odds terbaik pasar : `{odds:.2f}` _(ref: {platform})_",
+        f"📊 Peluang fair (AI)  : `{ai_pct:.1f}%`",
+        f"📉 Peluang tersirat   : `{implied_pct:.1f}%`",
+        f"📈 Edge               : `+{edge_pct:.1f}%`",
         "",
         f"💵 *Rekomendasi Modal (Kelly):*",
         f"   → {kelly_str}",
         "",
-        f"🔗 [Buka di Stake]({stake_url})",
+        f"🔗 [Cek di Stake]({stake_url})",
         "",
-        "⚠️ _Pasang MANUAL di Stake. Bot hanya memberi sinyal._",
+        "⚠️ _Cek apakah Stake menawarkan odds serupa, lalu pasang MANUAL._",
     ]
     return "\n".join(lines)
 
@@ -141,6 +142,7 @@ def send_value_bet_alert(
     ai_prob: float,
     sport_key: str = "unknown",
     opp_type: str = "value_bet",
+    platform: str = "market",
 ) -> bool:
     """
     Kirim notifikasi value bet ke Telegram, lengkap dengan tombol interaktif
@@ -163,6 +165,7 @@ def send_value_bet_alert(
         ai_prob=ai_prob,
         sport_key=sport_key,
         opp_type=opp_type,
+        platform=platform,
     )
 
     signal_id = uuid.uuid4().hex[:12]

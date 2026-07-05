@@ -151,10 +151,14 @@ def run_betting_cycle(
                     match_id, label, fair_probs.get("Home", 0.0), fair_probs.get("Away", 0.0),
                 )
 
-            opportunities = scan_opportunities(match["stake_odds"], fair_probs)
+            opportunities = scan_opportunities(
+                match["best_odds"],
+                fair_probs,
+                best_bookmaker=match.get("best_bookmaker"),
+            )
 
             if not opportunities:
-                logger.info("[%s] Tidak ada value bet di Stake untuk match ini.", match_id)
+                logger.info("[%s] Tidak ada value bet untuk match ini.", match_id)
                 continue
 
             for opp in opportunities:
@@ -163,10 +167,11 @@ def run_betting_cycle(
                 edge: float = opp["edge"]
                 opp_type: str = opp["type"]
                 ai_prob: float = opp["ai_prob"]
+                platform: str = opp["platform"]
 
                 logger.info(
-                    "[%s] %s | %s @ %.2f | edge=%.4f | platform=stake",
-                    match_id, opp_type.upper(), outcome, odds, edge,
+                    "[%s] %s | %s @ %.2f | edge=%.4f | ref=%s (cek Stake manual)",
+                    match_id, opp_type.upper(), outcome, odds, edge, platform,
                 )
 
                 stake = calculate_idr_stake(
@@ -197,6 +202,7 @@ def run_betting_cycle(
                         ai_prob=ai_prob,
                         sport_key=sport_key,
                         opp_type=opp_type,
+                        platform=platform,
                     )
                     if sent:
                         signals_sent += 1

@@ -354,7 +354,7 @@ class StakeFetcher:
                 f"{ODDS_API_BASE}/sports/{sport_key}/odds",
                 params={
                     "apiKey": config.ODDS_API_KEY,
-                    "regions": "eu,us,au",
+                    "regions": "eu,us,au,uk",
                     "markets": "h2h",
                     "oddsFormat": "decimal",
                 },
@@ -389,7 +389,6 @@ class StakeFetcher:
 
             # Kumpulkan odds RIIL per-bookmaker (tidak ada data buatan/placeholder).
             odds_by_bookmaker: dict = {}
-            stake_odds: dict = {}
 
             for bookie in event.get("bookmakers") or []:
                 bookie_key = bookie.get("key", "unknown")
@@ -411,21 +410,36 @@ class StakeFetcher:
 
                     if bookie_outcomes.get("Home") and bookie_outcomes.get("Away"):
                         odds_by_bookmaker[bookie_key] = bookie_outcomes
-                        if bookie_key == "stake":
-                            stake_odds = bookie_outcomes
 
-            # Wajib ada odds Stake yang riil — kalau tidak, match tidak bisa
-            # dieksekusi user (dia hanya punya akun Stake), jadi dilewati.
-            if not stake_odds:
-                continue
-
-            # Wajib ada minimal beberapa bookmaker lain untuk hitung konsensus
-            # pasar riil. Kalau tidak cukup, predictor akan melewati match ini
-            # sendiri — tapi kita filter di sini juga supaya hemat proses.
+            # Butuh minimal 2 bookmaker untuk hitung konsensus pasar yang valid.
             if len(odds_by_bookmaker) < 2:
                 continue
 
-            is_3way = "Draw" in stake_odds
+            # Cari odds terbaik per outcome dari semua bookmaker yang tersedia.
+            # Stake tidak selalu ada di OddsAPI — bot membandingkan konsensus pasar
+            # vs odds terbaik yang tersedia, user kemudian cek manual di Stake.
+            all_outcomes = set()
+            for book_odds in odds_by_bookmaker.values():
+                all_outcomes.update(book_odds.keys())
+
+            best_odds: dict = {}
+            best_bookmaker: dict = {}  # outcome → nama bookmaker dengan odds terbaik
+            for outcome in all_outcomes:
+                best_price = 0.0
+                best_bookie = ""
+                for bk, bk_odds in odds_by_bookmaker.items():
+                    price = bk_odds.get(outcome, 0.0)
+                    if price > best_price:
+                        best_price = price
+                        best_bookie = bk
+                if best_price > 1.0:
+                    best_odds[outcome] = best_price
+                    best_bookmaker[outcome] = best_bookie
+
+            if not best_odds.get("Home") or not best_odds.get("Away"):
+                continue
+
+            is_3way = "Draw" in best_odds
 
             matches.append({
                 "match_id": event_id,
@@ -435,7 +449,10 @@ class StakeFetcher:
                 "is_3way": is_3way,
                 "commence_time": event.get("commence_time", ""),
                 "odds_data_all": odds_by_bookmaker,
-                "stake_odds": stake_odds,
+                # Odds terbaik dari pasar (bukan Stake khusus — Stake tidak selalu
+                # ada di OddsAPI). User wajib cek manual di Stake sebelum taruhan.
+                "best_odds": best_odds,
+                "best_bookmaker": best_bookmaker,
             })
 
         return matches
