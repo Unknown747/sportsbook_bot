@@ -25,17 +25,17 @@ echo ""
 # ── 1. Cari Python 3 ─────────────────────────────────────────
 info "Memeriksa Python..."
 PYTHON=""
-for cmd in python3 python3.11 python3.10 python3.9 python; do
+for cmd in python3 python python3.12 python3.11 python3.10 python3.9; do
     if command -v "$cmd" &>/dev/null; then
-        VER=$("$cmd" -c "import sys; print(sys.version_info[:2])")
-        if "$cmd" -c "import sys; sys.exit(0 if sys.version_info >= (3,9) else 1)" 2>/dev/null; then
+        if "$cmd" -c "import sys; assert sys.version_info >= (3,7)" 2>/dev/null; then
             PYTHON="$cmd"
-            ok "Python ditemukan: $cmd ($VER)"
+            VER=$("$cmd" -c "import sys; v=sys.version_info; print(f'{v.major}.{v.minor}.{v.micro}')")
+            ok "Python ditemukan: $cmd (v$VER)"
             break
         fi
     fi
 done
-[ -z "$PYTHON" ] && fail "Python 3.9+ tidak ditemukan. Install dulu: sudo apt install python3"
+[ -z "$PYTHON" ] && fail "Python 3.7+ tidak ditemukan. Install dulu: sudo apt install python3"
 
 # ── 2. Cek file .env ─────────────────────────────────────────
 info "Memeriksa file .env..."
