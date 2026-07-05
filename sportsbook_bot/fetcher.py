@@ -97,9 +97,12 @@ ODDS_API_BASE: str = "https://api.the-odds-api.com/v4"
 
 SPORT_TO_ODDSAPI: dict = {
     "soccer": "soccer_epl",
-    "basketball": "basketball_nba",
-    "tennis": "tennis_atp_wimbledon",
+    "basketball": "basketball_wnba",
     "baseball": "baseball_mlb",
+    "american-football": "americanfootball_nfl_preseason",
+    "cricket": "cricket_international_t20",
+    "baseball_kbo": "baseball_kbo",
+    "baseball_npb": "baseball_npb",
 }
 
 
@@ -222,10 +225,9 @@ class StakeFetcher:
                 f"{ODDS_API_BASE}/sports/{sport_key}/odds",
                 params={
                     "apiKey": ODDS_API_KEY,
-                    "regions": "eu",
+                    "regions": "eu,us,au",
                     "markets": "h2h",
                     "oddsFormat": "decimal",
-                    "bookmakers": "stake",
                 },
                 timeout=15,
             )
@@ -281,22 +283,46 @@ class StakeFetcher:
                     best_draw = max(best_draw, bookie_odds.get("Draw", 0.0))
                     best_away = max(best_away, bookie_odds.get("Away", 0.0))
 
-            # Use Stake odds if available, otherwise best odds from any bookmaker
+            # Use Stake odds if available, else best from any bookmaker
             h = stake_home or best_home
-            d = stake_draw or best_draw
+            d = stake_draw or best_draw   # 0.0 for 2-way markets (no draw)
             a = stake_away or best_away
 
-            if not all([h > 1.0, a > 1.0]):
+            # Must have at least Home and Away odds
+            if not (h > 1.0 and a > 1.0):
                 continue
 
+            is_3way = d > 1.0   # True for soccer; False for baseball/basketball
+
+            def _build_odds(home: float, draw: float, away: float) -> dict:
+                """Build odds dict — include Draw only if available."""
+                o: dict = {"Home": home, "Away": away}
+                if draw > 1.0:
+                    o["Draw"] = draw
+                return o
+
             odds_data: dict = {}
-            if stake_home and stake_draw and stake_away:
-                odds_data["stake"] = {"Home": stake_home, "Draw": stake_draw, "Away": stake_away}
-            if best_home and best_draw and best_away:
-                odds_data["best"] = {"Home": best_home, "Draw": best_draw, "Away": best_away}
+
+            # Best available odds across all bookmakers
+            best_odds = _build_odds(best_home, best_draw, best_away)
+            if best_odds:
+                odds_data["best"] = best_odds
+
+            # Stake-specific odds (only if stake bookmaker listed for this sport)
+            if stake_home > 1.0 and stake_away > 1.0:
+                stake_odds = _build_odds(stake_home, stake_draw, stake_away)
+                odds_data["stake"] = stake_odds
 
             if not odds_data:
                 continue
+
+            # active_odds_ids — placeholder; replaced by real Stake IDs when available
+            active_ids: dict = {
+                "Home": f"{event_id}_home",
+                "Away": f"{event_id}_away",
+            }
+            if is_3way:
+                active_ids["Draw"] = f"{event_id}_draw"
 
             matches.append({
                 "match_id": event_id,
@@ -304,16 +330,13 @@ class StakeFetcher:
                 "away_team": away_name,
                 "home_strength": 50.0,
                 "away_strength": 50.0,
-                "league_draw_rate": 0.27,
+                "league_draw_rate": 0.27 if is_3way else 0.0,
                 "sentiment_home_bias": 0.0,
                 "sport": event.get("sport_key", sport_key),
+                "is_3way": is_3way,
                 "commence_time": event.get("commence_time", ""),
                 "odds_data": odds_data,
-                "active_odds_ids": {
-                    "Home": f"{event_id}_home",
-                    "Draw": f"{event_id}_draw",
-                    "Away": f"{event_id}_away",
-                },
+                "active_odds_ids": active_ids,
             })
 
         return matches

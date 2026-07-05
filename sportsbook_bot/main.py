@@ -22,7 +22,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sportsbook_bot.main")
 
-SPORTS_TO_SCAN = ["soccer", "basketball", "tennis"]
+SPORTS_TO_SCAN = ["baseball", "basketball", "american-football", "cricket", "baseball_kbo", "baseball_npb"]
 
 
 def _get_sample_matches() -> list:
@@ -135,21 +135,30 @@ def run_betting_cycle(
             ensemble_probs: Dict[str, float] = get_ensemble_prediction(match)
             consensus_probs: Dict[str, float] = get_multi_agent_consensus(match)
 
+            # Determine which outcomes are available (2-way vs 3-way market)
+            is_3way: bool = match.get("is_3way", True)
+            active_outcomes = ["Home", "Draw", "Away"] if is_3way else ["Home", "Away"]
+
             blended: Dict[str, float] = {
-                outcome: (ensemble_probs[outcome] + consensus_probs[outcome]) / 2.0
-                for outcome in ("Home", "Draw", "Away")
+                outcome: (ensemble_probs.get(outcome, 0.0) + consensus_probs.get(outcome, 0.0)) / 2.0
+                for outcome in active_outcomes
             }
             total = sum(blended.values())
-            ai_probs: Dict[str, float] = {k: v / total for k, v in blended.items()}
+            ai_probs: Dict[str, float] = {k: v / total for k, v in blended.items()} if total > 0 else {
+                k: 1.0 / len(active_outcomes) for k in active_outcomes
+            }
 
-            logger.info(
-                "[%s] %s | AI: Home=%.3f Draw=%.3f Away=%.3f",
-                match_id,
-                label,
-                ai_probs["Home"],
-                ai_probs["Draw"],
-                ai_probs["Away"],
-            )
+            if is_3way:
+                logger.info(
+                    "[%s] %s | AI: Home=%.3f Draw=%.3f Away=%.3f",
+                    match_id, label,
+                    ai_probs["Home"], ai_probs.get("Draw", 0.0), ai_probs["Away"],
+                )
+            else:
+                logger.info(
+                    "[%s] %s | AI: Home=%.3f Away=%.3f (2-way market)",
+                    match_id, label, ai_probs["Home"], ai_probs["Away"],
+                )
 
             opportunities = scan_opportunities(match["odds_data"], ai_probs)
 

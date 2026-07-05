@@ -36,5 +36,101 @@
       "currency": "idr",
       "createdAt": "2026-07-05T09:42:11.273550+00:00"
     }
+  },
+  {
+    "timestamp": "2026-07-05T10:17:16.821091+00:00",
+    "active_odds_id": "2991d31eedcff470d7105f7237e66e03_away",
+    "stake_idr": 2160.425466980641,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "2991d31eedcff470d7105f7237e66e03",
+      "home_team": "Los Angeles Dodgers",
+      "away_team": "San Diego Padres",
+      "outcome": "Away",
+      "odds": 3.0,
+      "edge": 0.144,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_2991d31eedcff470d7105f7237e66e03_away_2026-07-05T10:17:16.821091+00:00",
+      "status": "SIMULATED",
+      "amount": 2160.425466980641,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:17:16.821091+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:17:16.838967+00:00",
+    "active_odds_id": "54f91bf5767bbff2f9bb1f444a6fc510_home",
+    "stake_idr": 2588.930849918543,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "54f91bf5767bbff2f9bb1f444a6fc510",
+      "home_team": "Toronto Tempo",
+      "away_team": "Dallas Wings",
+      "outcome": "Home",
+      "odds": 2.74,
+      "edge": 0.1644,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_54f91bf5767bbff2f9bb1f444a6fc510_home_2026-07-05T10:17:16.838967+00:00",
+      "status": "SIMULATED",
+      "amount": 2588.930849918543,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:17:16.838967+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:17:16.848064+00:00",
+    "active_odds_id": "9c39120f2059c1fee0df606e5979d967_away",
+    "stake_idr": 4263.733699826017,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "9c39120f2059c1fee0df606e5979d967",
+      "home_team": "Minnesota Lynx",
+      "away_team": "Connecticut Sun",
+      "outcome": "Away",
+      "odds": 12.2,
+      "edge": 0.3914,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_9c39120f2059c1fee0df606e5979d967_away_2026-07-05T10:17:16.848064+00:00",
+      "status": "SIMULATED",
+      "amount": 4263.733699826017,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:17:16.848064+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:17:16.870152+00:00",
+    "active_odds_id": "b3c827872925b2cd2de58578705dbb67_home",
+    "stake_idr": 4248.789690994702,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "b3c827872925b2cd2de58578705dbb67",
+      "home_team": "SSG Landers",
+      "away_team": "Samsung Lions",
+      "outcome": "Home",
+      "odds": 6.5,
+      "edge": 0.3595,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_b3c827872925b2cd2de58578705dbb67_home_2026-07-05T10:17:16.870152+00:00",
+      "status": "SIMULATED",
+      "amount": 4248.789690994702,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:17:16.870152+00:00"
+    }
   }
 ]

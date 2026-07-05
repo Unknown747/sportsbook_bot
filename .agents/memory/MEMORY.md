@@ -1,0 +1,2 @@
+- [Stake sportsbook API limitation](stake-api-limitation.md) — sportsbook odds/events blocked via API key; only casino + account queries work
+- [OddsAPI 2-way market bug](oddsapi-2way-fix.md) — must NOT filter `bookmakers: stake`; must handle Draw=0 for non-soccer sports
