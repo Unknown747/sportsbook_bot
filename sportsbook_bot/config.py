@@ -11,7 +11,7 @@ MAX_BET_IDR: float = 5000.0
 MAX_DAILY_DRAWDOWN: float = 0.10
 
 STAKE_API_URL: str = "https://api.stake.com/graphql"
-STAKE_SESSION_TOKEN: str = "GANTI_DENGAN_COOKIE_X_ACCESS_TOKEN_ANDA"
+STAKE_API_KEY: str = __import__("os").environ.get("STAKE_API_KEY", "")
 STAKE_CURRENCY: str = "idr"
 
 SIMULATION_MODE: bool = True
