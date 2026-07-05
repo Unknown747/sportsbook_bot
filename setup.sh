@@ -85,8 +85,10 @@ ok "Dependencies terinstall"
 
 # ── 4. Verifikasi python-dotenv bisa load .env ───────────────
 info "Memverifikasi .env terbaca oleh Python..."
-VERIFY=$($PYTHON - <<'EOF'
+VERIFY=$($PYTHON - "$SCRIPT_DIR/.env" <<'EOF'
 import os, sys
+
+dotenv_path = sys.argv[1]
 
 try:
     from dotenv import load_dotenv
@@ -94,7 +96,7 @@ except ImportError:
     print("DOTENV_MISSING")
     sys.exit(1)
 
-load_dotenv(override=True)
+load_dotenv(dotenv_path=dotenv_path, override=True)
 
 missing = []
 for k in ["ODDS_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
