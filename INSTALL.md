@@ -48,6 +48,27 @@ Dependensi yang diinstall:
 
 ---
 
+## Langkah 3b — (Opsional) Daftar OddsAPI untuk Data Odds Live
+
+Stake.com membatasi akses odds pertandingan melalui API key — odds live hanya bisa diambil melalui penyedia data eksternal. Bot mendukung **the-odds-api.com** (gratis 500 request/bulan):
+
+1. Daftar di [the-odds-api.com](https://the-odds-api.com)
+2. Salin API key kamu
+3. Tambahkan ke environment variable (lihat Langkah 4):
+   ```
+   Key:   ODDS_API_KEY
+   Value: <odds-api-key-kamu>
+   ```
+
+Tanpa `ODDS_API_KEY`, bot tetap berjalan menggunakan **sample data** (aman untuk simulasi dan testing).
+
+| Mode | ODDS_API_KEY | Sumber Data |
+|---|---|---|
+| Simulasi penuh | Tidak perlu | Sample data bawaan |
+| Live odds | Wajib diset | the-odds-api.com |
+
+---
+
 ## Langkah 4 — Set API Key sebagai Environment Variable
 
 ### Di Replit (Rekomendasi)

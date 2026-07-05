@@ -38,7 +38,8 @@ class StakeExecutor:
         self.session.headers.update(
             {
                 "Content-Type": "application/json",
-                "x-api-key": config.STAKE_API_KEY,
+                "x-access-token": config.STAKE_API_KEY,
+                "Connection": "keep-alive",
             }
         )
         self._ensure_history_file()

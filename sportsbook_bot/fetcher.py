@@ -1,10 +1,37 @@
 """
 Fetcher module for Sportsbook Auto Betting Agent.
-Queries Stake.com GraphQL API for live and upcoming sports events with odds.
-Falls back to sample data if the API is unreachable or returns no results.
+
+STATUS API STAKE SPORTSBOOK:
+  Stake.com membatasi akses GraphQL sportsbook lewat API key publik.
+  API key yang tersedia (x-access-token) hanya memberi akses penuh ke
+  casino games (Dice, Limbo, Mines). Query sportEvents / slugEvent /
+  sportFixtures mengembalikan 400/data kosong dari server Stake.
+
+  Yang BISA diakses via API key:
+    - user { id name balances }          → verifikasi auth
+    - sportList                           → daftar cabang olahraga
+    - tournamentList                      → daftar turnamen aktif
+    - allSportBets                        → riwayat taruhan sports akun
+    - createSportsBet mutation            → pasang taruhan (jika ada odds ID)
+
+  Yang TIDAK bisa diakses via API key biasa:
+    - Live odds / markets per pertandingan
+    - sportEvents / sportFixtures / event detail
+
+SOLUSI YANG DIPAKAI:
+  Bot menggunakan data odds dari sample/konfigurasi manual, atau dari
+  penyedia data odds pihak ketiga (OddsAPI, SportRadar, dll) yang bisa
+  dikonfigurasi di config.py. Fallback ke sample data jika tidak ada
+  sumber odds eksternal.
+
+  Untuk pengembangan lebih lanjut, pertimbangkan:
+  1. Odds-API (the-odds-api.com) — gratis 500 request/bulan
+  2. SportRadar API — data odds profesional
+  3. API-Sports (api-sports.io) — gratis 100 request/hari
 """
 
 import logging
+import os
 from typing import Optional
 
 import requests
@@ -14,284 +41,315 @@ from sportsbook_bot import config
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
-# GraphQL Queries
+# Queries yang TERBUKTI bekerja di Stake API
 # ---------------------------------------------------------------------------
 
-QUERY_SPORT_EVENTS = """
-query GetSportEvents($sport: String, $limit: Int, $status: SportEventStatus) {
-  sportEvents(sport: $sport, limit: $limit, status: $status) {
+USER_QUERY = """
+{
+  user {
     id
-    slug
     name
-    status
-    startTime
-    home {
-      id
-      name
-    }
-    away {
-      id
-      name
-    }
-    markets {
-      id
-      slug
-      name
-      status
-      outcomes {
-        id
-        slug
-        name
-        odds
-        status
+    balances {
+      available {
+        amount
+        currency
       }
     }
   }
 }
 """
 
-QUERY_SPORT_FIXTURES = """
-query GetFixtures($sport: String, $limit: Int) {
-  fixtures(sport: $sport, limit: $limit) {
+TOURNAMENT_LIST_QUERY = """
+{
+  tournamentList(limit: 30) {
     id
     name
-    startTime
-    homeTeam { id name }
-    awayTeam { id name }
-    odds {
-      home
-      draw
-      away
-      homeOddsId
-      drawOddsId
-      awayOddsId
-    }
+    slug
   }
 }
 """
 
+SPORT_LIST_QUERY = """
+{
+  sportList {
+    id
+    name
+    slug
+  }
+}
+"""
+
+ALL_SPORT_BETS_QUERY = """
+query AllSportBets($limit: Int) {
+  allSportBets(limit: $limit) {
+    id
+  }
+}
+"""
+
+# ---------------------------------------------------------------------------
+# Opsional: OddsAPI (the-odds-api.com) — gratis 500 req/bulan
+# Set ODDS_API_KEY di environment variable untuk mengaktifkan
+# ---------------------------------------------------------------------------
+
+ODDS_API_KEY: str = os.environ.get("ODDS_API_KEY", "")
+ODDS_API_BASE: str = "https://api.the-odds-api.com/v4"
+
+SPORT_TO_ODDSAPI: dict = {
+    "soccer": "soccer_epl",
+    "basketball": "basketball_nba",
+    "tennis": "tennis_atp_wimbledon",
+    "baseball": "baseball_mlb",
+}
+
 
 class StakeFetcher:
-    """Fetches live and upcoming sport events from Stake.com GraphQL API."""
+    """
+    Fetches sports match data for the betting bot.
+
+    Primary source : OddsAPI (if ODDS_API_KEY is set)
+    Fallback       : Sample/manual data (always available)
+
+    Also provides Stake API utility methods (verify auth, get user info).
+    """
 
     def __init__(self) -> None:
-        self.session = requests.Session()
-        self.session.headers.update(
+        self.stake_session = requests.Session()
+        self.stake_session.headers.update(
             {
                 "Content-Type": "application/json",
-                "x-api-key": config.STAKE_API_KEY,
+                "x-access-token": config.STAKE_API_KEY,
+                "Connection": "keep-alive",
             }
         )
+        self.odds_session = requests.Session()
 
-    def _post(self, query: str, variables: dict) -> Optional[dict]:
-        """
-        Send a GraphQL POST request to Stake.com.
+    # ------------------------------------------------------------------
+    # Stake API utility methods
+    # ------------------------------------------------------------------
 
-        Args:
-            query: GraphQL query string.
-            variables: Variables dict for the query.
-
-        Returns:
-            Parsed JSON response dict, or None on failure.
-        """
-        payload = {"query": query, "variables": variables}
+    def _stake_post(self, query: str, variables: Optional[dict] = None) -> Optional[dict]:
+        """Send a GraphQL request to Stake.com. Returns 'data' field or None."""
+        payload: dict = {"query": query}
+        if variables:
+            payload["variables"] = variables
         try:
-            resp = self.session.post(config.STAKE_API_URL, json=payload, timeout=15)
+            resp = self.stake_session.post(config.STAKE_API_URL, json=payload, timeout=20)
             resp.raise_for_status()
-            data = resp.json()
-            if "errors" in data:
-                logger.warning("GraphQL errors: %s", data["errors"])
+            body = resp.json()
+            if "errors" in body:
+                for err in body["errors"]:
+                    msg = err.get("message", "")
+                    if any(k in msg.lower() for k in ("access denied", "session", "unauthorized")):
+                        raise PermissionError(msg)
+                logger.warning("GraphQL errors: %s", body["errors"])
                 return None
-            return data.get("data")
+            return body.get("data")
+        except PermissionError:
+            raise
         except requests.exceptions.Timeout:
-            logger.error("Stake API timeout saat fetch events.")
-        except requests.exceptions.ConnectionError:
-            logger.error("Tidak dapat terhubung ke Stake API.")
+            logger.error("Stake API timeout.")
         except requests.exceptions.HTTPError as exc:
             logger.error("HTTP error dari Stake API: %s", exc)
         except Exception as exc:
-            logger.error("Unexpected error fetching events: %s", exc)
+            logger.error("Error Stake API: %s", exc)
         return None
 
-    def _parse_sport_events(self, data: dict) -> list:
+    def verify_connection(self) -> bool:
         """
-        Parse sportEvents response into bot match format.
-
-        Args:
-            data: Raw 'data' field from GraphQL response.
+        Verify API key and connectivity by querying user info.
 
         Returns:
-            List of match dicts compatible with the bot's pipeline.
+            True if auth succeeds, False otherwise.
         """
-        events = data.get("sportEvents") or []
-        matches = []
+        try:
+            data = self._stake_post(USER_QUERY)
+            if data and data.get("user"):
+                user = data["user"]
+                logger.info(
+                    "Stake API OK — User: %s (id=%s)",
+                    user.get("name", "?"),
+                    user.get("id", "?"),
+                )
+                # Log balances
+                for bal in user.get("balances") or []:
+                    avail = bal.get("available", {})
+                    if float(avail.get("amount", 0)) > 0:
+                        logger.info(
+                            "  Saldo %s: %s",
+                            avail.get("currency", "?").upper(),
+                            avail.get("amount"),
+                        )
+                return True
+            logger.warning("Stake API OK tapi data user kosong.")
+            return False
+        except PermissionError as exc:
+            logger.error("API key tidak valid: %s", exc)
+            return False
 
-        for event in events:
-            home = event.get("home") or {}
-            away = event.get("away") or {}
-            home_name = home.get("name", "Home Team")
-            away_name = away.get("name", "Away Team")
+    def get_active_tournaments(self) -> list:
+        """
+        Fetch list of active tournaments from Stake.com.
+
+        Returns:
+            List of tournament dicts with id, name, slug.
+        """
+        data = self._stake_post(TOURNAMENT_LIST_QUERY)
+        if data:
+            return data.get("tournamentList") or []
+        return []
+
+    # ------------------------------------------------------------------
+    # OddsAPI (the-odds-api.com) — primary odds source
+    # ------------------------------------------------------------------
+
+    def _fetch_odds_api(self, sport_key: str, limit: int = 20) -> list:
+        """
+        Fetch live/upcoming match odds from the-odds-api.com.
+
+        Args:
+            sport_key: OddsAPI sport key e.g. 'soccer_epl', 'basketball_nba'.
+            limit: Max number of events to return.
+
+        Returns:
+            List of match dicts in bot format, or [] on failure.
+        """
+        if not ODDS_API_KEY:
+            return []
+
+        try:
+            resp = self.odds_session.get(
+                f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                params={
+                    "apiKey": ODDS_API_KEY,
+                    "regions": "eu",
+                    "markets": "h2h",
+                    "oddsFormat": "decimal",
+                    "bookmakers": "stake",
+                },
+                timeout=15,
+            )
+
+            remaining = resp.headers.get("x-requests-remaining", "?")
+            logger.info("OddsAPI remaining requests: %s", remaining)
+
+            if resp.status_code == 401:
+                logger.error("OddsAPI: API key tidak valid.")
+                return []
+            if resp.status_code == 422:
+                logger.warning("OddsAPI: sport '%s' tidak tersedia.", sport_key)
+                return []
+
+            resp.raise_for_status()
+            events = resp.json()
+
+        except requests.exceptions.RequestException as exc:
+            logger.error("OddsAPI request error: %s", exc)
+            return []
+
+        matches = []
+        for event in events[:limit]:
+            home_name = event.get("home_team", "Home")
+            away_name = event.get("away_team", "Away")
             event_id = event.get("id", "unknown")
 
-            # Extract 1X2 market (home/draw/away)
+            # Find best odds from available bookmakers
+            best_home, best_draw, best_away = 0.0, 0.0, 0.0
+            stake_home, stake_draw, stake_away = 0.0, 0.0, 0.0
+
+            for bookie in event.get("bookmakers") or []:
+                for market in bookie.get("markets") or []:
+                    if market.get("key") != "h2h":
+                        continue
+                    bookie_odds: dict = {}
+                    for outcome in market.get("outcomes") or []:
+                        name = outcome.get("name", "")
+                        price = float(outcome.get("price", 0))
+                        if name == home_name:
+                            bookie_odds["Home"] = price
+                        elif name == away_name:
+                            bookie_odds["Away"] = price
+                        else:
+                            bookie_odds["Draw"] = price
+
+                    if bookie.get("key") == "stake":
+                        stake_home = bookie_odds.get("Home", 0.0)
+                        stake_draw = bookie_odds.get("Draw", 0.0)
+                        stake_away = bookie_odds.get("Away", 0.0)
+
+                    best_home = max(best_home, bookie_odds.get("Home", 0.0))
+                    best_draw = max(best_draw, bookie_odds.get("Draw", 0.0))
+                    best_away = max(best_away, bookie_odds.get("Away", 0.0))
+
+            # Use Stake odds if available, otherwise best odds from any bookmaker
+            h = stake_home or best_home
+            d = stake_draw or best_draw
+            a = stake_away or best_away
+
+            if not all([h > 1.0, a > 1.0]):
+                continue
+
             odds_data: dict = {}
-            active_odds_ids: dict = {}
+            if stake_home and stake_draw and stake_away:
+                odds_data["stake"] = {"Home": stake_home, "Draw": stake_draw, "Away": stake_away}
+            if best_home and best_draw and best_away:
+                odds_data["best"] = {"Home": best_home, "Draw": best_draw, "Away": best_away}
 
-            for market in event.get("markets") or []:
-                market_slug = (market.get("slug") or market.get("name") or "").lower()
-                # Look for match result / 1x2 / full-time market
-                if not any(kw in market_slug for kw in ("1x2", "match_result", "result", "winner", "full")):
-                    continue
-                if market.get("status") not in (None, "ACTIVE", "active", "OPEN", "open"):
-                    continue
-
-                stake_odds: dict = {}
-                for outcome in market.get("outcomes") or []:
-                    if outcome.get("status") not in (None, "ACTIVE", "active", "OPEN", "open"):
-                        continue
-                    name = (outcome.get("name") or "").lower()
-                    odds_val = outcome.get("odds")
-                    outcome_id = outcome.get("id")
-
-                    if odds_val is None or outcome_id is None:
-                        continue
-
-                    try:
-                        odds_float = float(odds_val)
-                    except (TypeError, ValueError):
-                        continue
-
-                    if "home" in name or name == "1":
-                        stake_odds["Home"] = odds_float
-                        active_odds_ids["Home"] = outcome_id
-                    elif "draw" in name or name == "x":
-                        stake_odds["Draw"] = odds_float
-                        active_odds_ids["Draw"] = outcome_id
-                    elif "away" in name or name == "2":
-                        stake_odds["Away"] = odds_float
-                        active_odds_ids["Away"] = outcome_id
-
-                if len(stake_odds) == 3:
-                    odds_data["stake"] = stake_odds
-                    break  # Found a complete 1X2 market
-
-            if len(odds_data.get("stake", {})) < 3:
-                logger.debug("Event %s tidak punya odds 1X2 lengkap, dilewati.", event_id)
+            if not odds_data:
                 continue
 
-            matches.append(
-                {
-                    "match_id": event_id,
-                    "home_team": home_name,
-                    "away_team": away_name,
-                    "home_strength": 50.0,
-                    "away_strength": 50.0,
-                    "league_draw_rate": 0.27,
-                    "sentiment_home_bias": 0.0,
-                    "odds_data": odds_data,
-                    "active_odds_ids": active_odds_ids,
-                }
-            )
+            matches.append({
+                "match_id": event_id,
+                "home_team": home_name,
+                "away_team": away_name,
+                "home_strength": 50.0,
+                "away_strength": 50.0,
+                "league_draw_rate": 0.27,
+                "sentiment_home_bias": 0.0,
+                "sport": event.get("sport_key", sport_key),
+                "commence_time": event.get("commence_time", ""),
+                "odds_data": odds_data,
+                "active_odds_ids": {
+                    "Home": f"{event_id}_home",
+                    "Draw": f"{event_id}_draw",
+                    "Away": f"{event_id}_away",
+                },
+            })
 
         return matches
 
-    def _parse_fixtures(self, data: dict) -> list:
-        """
-        Parse fixtures response into bot match format.
-
-        Args:
-            data: Raw 'data' field from GraphQL response.
-
-        Returns:
-            List of match dicts compatible with the bot's pipeline.
-        """
-        fixtures = data.get("fixtures") or []
-        matches = []
-
-        for fix in fixtures:
-            odds_block = fix.get("odds") or {}
-            home_odds = odds_block.get("home")
-            draw_odds = odds_block.get("draw")
-            away_odds = odds_block.get("away")
-
-            if not all([home_odds, draw_odds, away_odds]):
-                continue
-
-            try:
-                stake_odds = {
-                    "Home": float(home_odds),
-                    "Draw": float(draw_odds),
-                    "Away": float(away_odds),
-                }
-            except (TypeError, ValueError):
-                continue
-
-            matches.append(
-                {
-                    "match_id": fix.get("id", "unknown"),
-                    "home_team": (fix.get("homeTeam") or {}).get("name", "Home"),
-                    "away_team": (fix.get("awayTeam") or {}).get("name", "Away"),
-                    "home_strength": 50.0,
-                    "away_strength": 50.0,
-                    "league_draw_rate": 0.27,
-                    "sentiment_home_bias": 0.0,
-                    "odds_data": {"stake": stake_odds},
-                    "active_odds_ids": {
-                        "Home": odds_block.get("homeOddsId", ""),
-                        "Draw": odds_block.get("drawOddsId", ""),
-                        "Away": odds_block.get("awayOddsId", ""),
-                    },
-                }
-            )
-
-        return matches
+    # ------------------------------------------------------------------
+    # Public interface
+    # ------------------------------------------------------------------
 
     def fetch_live_matches(self, sport: str = "soccer", limit: int = 20) -> list:
         """
-        Fetch live and upcoming matches from Stake.com.
+        Fetch live/upcoming matches with odds for the bot pipeline.
 
-        Tries two query strategies in sequence:
-          1. sportEvents query (primary)
-          2. fixtures query (fallback)
+        Primary source  : OddsAPI (if ODDS_API_KEY env var is set)
+        Fallback        : Empty list (main.py will use sample data)
 
         Args:
-            sport: Sport slug e.g. "soccer", "basketball", "tennis".
-            limit: Maximum number of events to fetch per request.
+            sport: Sport slug e.g. 'soccer', 'basketball', 'tennis'.
+            limit: Max events to return.
 
         Returns:
-            List of match dicts, or empty list if API is unreachable.
+            List of match dicts, or [] if no data available.
         """
-        logger.info("Fetching live matches dari Stake API (sport=%s, limit=%d)...", sport, limit)
+        oddsapi_key = SPORT_TO_ODDSAPI.get(sport)
 
-        # Strategy 1: sportEvents
-        data = self._post(
-            QUERY_SPORT_EVENTS,
-            {"sport": sport, "limit": limit, "status": "LIVE"},
-        )
-        if data:
-            matches = self._parse_sport_events(data)
+        if ODDS_API_KEY and oddsapi_key:
+            logger.info("Fetching '%s' dari OddsAPI (key=%s)...", sport, oddsapi_key)
+            matches = self._fetch_odds_api(oddsapi_key, limit)
             if matches:
-                logger.info("sportEvents: %d pertandingan LIVE ditemukan.", len(matches))
+                logger.info("OddsAPI: %d pertandingan '%s' ditemukan.", len(matches), sport)
                 return matches
+            logger.warning("OddsAPI: tidak ada data untuk '%s'.", sport)
+        else:
+            if not ODDS_API_KEY:
+                logger.debug(
+                    "ODDS_API_KEY tidak diset — OddsAPI dinonaktifkan. "
+                    "Set env var ODDS_API_KEY untuk data odds live."
+                )
 
-        # Strategy 1b: upcoming events
-        data = self._post(
-            QUERY_SPORT_EVENTS,
-            {"sport": sport, "limit": limit, "status": "UPCOMING"},
-        )
-        if data:
-            matches = self._parse_sport_events(data)
-            if matches:
-                logger.info("sportEvents: %d pertandingan UPCOMING ditemukan.", len(matches))
-                return matches
-
-        # Strategy 2: fixtures
-        data = self._post(QUERY_SPORT_FIXTURES, {"sport": sport, "limit": limit})
-        if data:
-            matches = self._parse_fixtures(data)
-            if matches:
-                logger.info("fixtures: %d pertandingan ditemukan.", len(matches))
-                return matches
-
-        logger.warning("Tidak ada data dari Stake API untuk sport '%s'.", sport)
         return []

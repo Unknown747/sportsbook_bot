@@ -12,7 +12,7 @@ MIN_BET_IDR: float = 2000.0
 MAX_BET_IDR: float = 5000.0
 MAX_DAILY_DRAWDOWN: float = 0.10
 
-STAKE_API_URL: str = "https://api.stake.com/graphql"
+STAKE_API_URL: str = "https://stake.com/_api/graphql"
 STAKE_API_KEY: str = os.environ.get("STAKE_API_KEY", "")
 STAKE_CURRENCY: str = "idr"
 
