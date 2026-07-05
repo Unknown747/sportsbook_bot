@@ -263,42 +263,77 @@ class StakeFetcher:
             logger.error("OddsAPI: gagal ambil daftar liga aktif: %s", exc)
             return self._active_sports_cache or []
 
-    def _resolve_sport_key(self, sport: str) -> Optional[str]:
+    # Hanya sport ini yang di-fetch dari semua liga aktif sekaligus.
+    # Sport lain (baseball, basketball, dll) cukup 1 liga preferensi —
+    # mereka tidak punya banyak liga bersamaan seperti sepak bola.
+    MULTI_LEAGUE_SPORTS: set = {"soccer"}
+
+    # Maksimal liga soccer yang di-fetch per siklus (hemat kuota OddsAPI).
+    MAX_SOCCER_LEAGUES: int = 8
+
+    # Kata kunci di sport key yang menandakan futures/outrights market
+    # (bukan pertandingan nyata) — dilewati supaya tidak buang request.
+    _FUTURES_KEYWORDS = ("winner", "championship", "season_wins", "outright", "futures")
+
+    def _is_futures_key(self, key: str) -> bool:
+        """True jika key adalah futures/outrights market, bukan jadwal pertandingan."""
+        return any(kw in key for kw in self._FUTURES_KEYWORDS)
+
+    def _resolve_sport_keys(self, sport: str) -> list:
         """
-        Tentukan OddsAPI sport key yang benar-benar AKTIF untuk kategori
-        `sport` saat ini. Banyak liga musiman (NFL, WNBA, dll) — key statis
-        di SPORT_TO_ODDSAPI hanya dipakai sebagai preferensi jika liga itu
-        masih aktif; kalau tidak, bot memilih liga aktif lain di grup yang
-        sama, atau melewati kategori itu sepenuhnya jika tidak ada liga
-        aktif (bukan menebak/memakai key basi yang pasti kosong).
+        Kembalikan OddsAPI sport key yang aktif untuk kategori `sport`.
+
+        - Soccer (MULTI_LEAGUE_SPORTS): kembalikan semua liga aktif dalam grup
+          Soccer (EPL, La Liga, Bundesliga, UCL, dll bisa aktif bersamaan),
+          dibatasi MAX_SOCCER_LEAGUES untuk hemat kuota.
+        - Sport lain: kembalikan 1 key preferensi saja — baseball/basketball/
+          dll biasanya hanya punya 1 liga utama aktif per siklus.
+        - Futures market (winner, championship, dll) selalu difilter keluar.
         """
         if sport in SPORT_FIXED_KEY:
-            return SPORT_FIXED_KEY[sport]
+            return [SPORT_FIXED_KEY[sport]]
 
         group = SPORT_TO_GROUP.get(sport)
+        preferred = SPORT_TO_ODDSAPI.get(sport)
+
         if group is None:
-            return SPORT_TO_ODDSAPI.get(sport)
+            return [preferred] if preferred else []
 
         active_sports = self._get_active_odds_api_sports()
         if not active_sports:
-            # Gagal ambil daftar aktif (mis. error jaringan) — fallback ke
-            # key statis, lebih baik dari pada tidak mencoba sama sekali.
-            return SPORT_TO_ODDSAPI.get(sport)
+            return [preferred] if preferred else []
 
+        # Filter: harus aktif, bukan futures market
         candidates = [
             s["key"] for s in active_sports
-            if s.get("group") == group and s.get("active") and s.get("key")
+            if s.get("group") == group
+            and s.get("active")
+            and s.get("key")
+            and not self._is_futures_key(s["key"])
         ]
+
         if not candidates:
             logger.info(
-                "Tidak ada liga aktif untuk kategori '%s' saat ini (kemungkinan "
-                "di luar musim) — kategori dilewati, bukan pakai key basi.",
+                "Tidak ada liga aktif untuk '%s' saat ini — kategori dilewati.",
                 sport,
             )
-            return None
+            return []
 
-        preferred = SPORT_TO_ODDSAPI.get(sport)
-        return preferred if preferred in candidates else candidates[0]
+        # Soccer: ambil semua (hingga batas), liga preferensi di depan
+        if sport in self.MULTI_LEAGUE_SPORTS:
+            if preferred and preferred in candidates:
+                candidates = [preferred] + [k for k in candidates if k != preferred]
+            return candidates[: self.MAX_SOCCER_LEAGUES]
+
+        # Sport lain: hanya 1 liga — preferensi jika aktif, fallback ke kandidat pertama
+        if preferred and preferred in candidates:
+            return [preferred]
+        return [candidates[0]]
+
+    def _resolve_sport_key(self, sport: str) -> Optional[str]:
+        """Backward-compat: kembalikan satu key saja (key pertama dari list)."""
+        keys = self._resolve_sport_keys(sport)
+        return keys[0] if keys else None
 
     def _fetch_odds_api(self, sport_key: str, limit: int = 20) -> list:
         """
@@ -413,15 +448,19 @@ class StakeFetcher:
         """
         Fetch live/upcoming matches with odds for the bot pipeline.
 
+        Untuk sport grup (Soccer, Basketball, dll): secara otomatis mengambil
+        dari SEMUA liga aktif dalam grup itu (bukan hanya satu liga preferensi),
+        lalu menggabungkan & deduplikasi hasilnya berdasarkan match_id.
+
         Source          : OddsAPI (requires ODDS_API_KEY env var)
         No data         : Returns [] — caller MUST skip, no fabricated fallback
 
         Args:
-            sport: Sport slug e.g. 'soccer', 'basketball', 'tennis'.
-            limit: Max events to return.
+            sport: Sport slug e.g. 'soccer', 'basketball', 'baseball'.
+            limit: Max events per league.
 
         Returns:
-            List of match dicts, or [] if no data available.
+            List of match dicts (semua liga digabung), atau [] jika tidak ada data.
         """
         if not config.ODDS_API_KEY:
             logger.debug(
@@ -430,14 +469,24 @@ class StakeFetcher:
             )
             return []
 
-        oddsapi_key = self._resolve_sport_key(sport)
+        sport_keys = self._resolve_sport_keys(sport)
+        if not sport_keys:
+            return []
 
-        if oddsapi_key:
-            logger.info("Fetching '%s' dari OddsAPI (key=%s)...", sport, oddsapi_key)
-            matches = self._fetch_odds_api(oddsapi_key, limit)
-            if matches:
-                logger.info("OddsAPI: %d pertandingan '%s' ditemukan.", len(matches), sport)
-                return matches
+        all_matches: dict = {}  # match_id → match dict (dedup otomatis)
+        for key in sport_keys:
+            logger.info("Fetching '%s' dari OddsAPI (key=%s)...", sport, key)
+            matches = self._fetch_odds_api(key, limit)
+            for m in matches:
+                all_matches[m["match_id"]] = m
+
+        result = list(all_matches.values())
+        if result:
+            logger.info(
+                "OddsAPI: %d pertandingan '%s' ditemukan dari %d liga.",
+                len(result), sport, len(sport_keys),
+            )
+        else:
             logger.warning("OddsAPI: tidak ada data untuk '%s'.", sport)
 
-        return []
+        return result

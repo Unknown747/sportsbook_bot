@@ -38,6 +38,7 @@ logging.basicConfig(
 logger = logging.getLogger("bot_main")
 
 SPORTS_TO_SCAN: List[str] = [
+    "soccer",
     "baseball",
     "basketball",
     "american-football",
