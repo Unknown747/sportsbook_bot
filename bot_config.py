@@ -35,9 +35,15 @@ ODDS_API_KEY: str = os.environ.get("ODDS_API_KEY", "")
 # ── Mode ──────────────────────────────────────────────────────────────────────
 # Catatan penting: Stake.com TIDAK menyediakan market/odds ID sportsbook riil
 # via API, dan situsnya diblok Cloudflare untuk scraping — jadi eksekusi bet
-# otomatis ke Stake tidak bisa dijalankan sungguhan. Bot ini berjalan sebagai
-# sinyal LIVE (data riil, tanpa fallback palsu) + konfirmasi taruhan MANUAL
-# oleh user lewat tombol Telegram.
+# otomatis ke Stake tidak bisa dijalankan sungguhan. Bot ini SELALU berjalan
+# sebagai sinyal LIVE (data riil, tanpa fallback palsu) + konfirmasi taruhan
+# MANUAL oleh user lewat tombol Telegram — ini bukan sesuatu yang bisa
+# di-toggle lewat config.
+#
+# SIMULATION_MODE di bawah ini LEGACY: hanya dibaca oleh StakeExecutor
+# (executor.py), kelas lama untuk auto-eksekusi taruhan yang TIDAK lagi
+# dipanggil dari loop utama (lihat catatan di atas). Diset "True" secara
+# default sebagai pengaman kalau kelas itu dipakai lagi di masa depan.
 SIMULATION_MODE: bool = os.environ.get("SIMULATION_MODE", "True").strip().lower() != "false"
 
 # ── Scheduling ────────────────────────────────────────────────────────────────

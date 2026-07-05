@@ -17,6 +17,7 @@ from typing import List, Tuple
 import bot_config as config
 from arbitrage_finder import scan_opportunities
 from bet_sizer import calculate_idr_stake
+from executor import get_today_confirmed_stake_total
 from fetcher import StakeFetcher
 from predictor import get_market_consensus_prediction
 from telegram_listener import start_listener
@@ -90,9 +91,8 @@ def _is_scheduled_hour() -> bool:
 def run_betting_cycle(
     fetcher: StakeFetcher,
     current_bankroll: float,
-    daily_loss: float,
     last_reset_date: date,
-) -> Tuple[float, float, date]:
+) -> Tuple[float, date]:
     """
     Jalankan satu siklus analisis lengkap:
       1. Fetch pertandingan (data odds riil dari OddsAPI — tidak ada fallback palsu).
@@ -100,14 +100,21 @@ def run_betting_cycle(
       3. Kirim sinyal Telegram (taruhan dipasang MANUAL oleh user, lalu dikonfirmasi
          lewat tombol — Stake tidak mendukung eksekusi taruhan otomatis via API).
 
+    Batas risiko harian (MAX_DAILY_DRAWDOWN) dihitung ULANG dari bet_history.json
+    setiap siklus (total stake CONFIRMED_MANUAL hari ini) — bukan dari counter
+    di memori — supaya tetap akurat walau taruhan dikonfirmasi via tombol
+    Telegram oleh thread listener yang terpisah dari loop utama ini.
+
     Returns:
-        (updated_bankroll, updated_daily_loss, updated_last_reset_date)
+        (updated_bankroll, updated_last_reset_date)
     """
     today = date.today()
     if today != last_reset_date:
-        logger.info("Hari baru — mereset daily loss counter.")
-        daily_loss = 0.0
+        logger.info("Hari baru — daily loss counter otomatis mulai dari 0 lagi.")
         last_reset_date = today
+
+    daily_loss = get_today_confirmed_stake_total(today)
+    logger.info("Total stake terkonfirmasi hari ini: Rp%.0f", daily_loss)
 
     matches = _fetch_all_matches(fetcher)
     logger.info("Memproses %d pertandingan.", len(matches))
@@ -204,7 +211,7 @@ def run_betting_cycle(
             bankroll=current_bankroll,
         )
 
-    return current_bankroll, daily_loss, last_reset_date
+    return current_bankroll, last_reset_date
 
 
 # ── Config validation ─────────────────────────────────────────────────────────
@@ -268,7 +275,6 @@ def main() -> None:
 
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
-    daily_loss: float = 0.0
     last_reset_date: date = date.today()
     last_scan_hour: int = -1     # hindari scan ganda dalam jam yang sama
 
@@ -279,19 +285,15 @@ def main() -> None:
             logger.info("=== JAM SCAN (WIB %02d:00) — memulai siklus ===", now_wib_hour)
             last_scan_hour = now_wib_hour
             try:
-                current_bankroll, daily_loss, last_reset_date = run_betting_cycle(
+                current_bankroll, last_reset_date = run_betting_cycle(
                     fetcher=fetcher,
                     current_bankroll=current_bankroll,
-                    daily_loss=daily_loss,
                     last_reset_date=last_reset_date,
                 )
             except Exception as exc:
                 logger.critical("Error kritis di siklus utama: %s", exc, exc_info=True)
 
-            logger.info(
-                "Siklus selesai. Bankroll=Rp%.0f | Daily loss=Rp%.0f",
-                current_bankroll, daily_loss,
-            )
+            logger.info("Siklus selesai. Bankroll=Rp%.0f", current_bankroll)
         else:
             next_hours = [h for h in config.SCHEDULED_HOURS if h > now_wib_hour]
             next_h = next_hours[0] if next_hours else config.SCHEDULED_HOURS[0]

@@ -9,6 +9,7 @@ dan tombol interaktif (inline keyboard) — TIDAK perlu ketik command apapun.
 import json
 import logging
 import os
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 
 PENDING_SIGNALS_FILE = "pending_signals.json"
+
+# pending_signals.json ditulis dari 2 thread berbeda (loop utama & Telegram
+# listener) — lock ini mencegah race condition read-modify-write.
+_pending_lock = threading.Lock()
 
 SPORT_TO_STAKE_URL: dict = {
     "baseball_mlb":               "https://stake.com/sports/baseball/mlb",
@@ -38,10 +43,9 @@ _OUTCOME_LABEL = {"Home": "🏠 Home (Tim Kandang)", "Away": "✈️ Away (Tim T
 _OUTCOME_EMOJI = {"Home": "🟢", "Away": "🔵", "Draw": "🟡"}
 
 
-def _build_stake_link(sport_key: str, home_team: str, away_team: str) -> str:
+def _build_stake_link(sport_key: str) -> str:
     """Return best-effort Stake.com link for the match sport page."""
-    base = SPORT_TO_STAKE_URL.get(sport_key, "https://stake.com/sports")
-    return base
+    return SPORT_TO_STAKE_URL.get(sport_key, "https://stake.com/sports")
 
 
 def _format_signal_message(
@@ -56,7 +60,7 @@ def _format_signal_message(
     opp_type: str,
 ) -> str:
     """Format a rich Telegram message for a value bet signal."""
-    stake_url = _build_stake_link(sport_key, home_team, away_team)
+    stake_url = _build_stake_link(sport_key)
     emoji = _OUTCOME_EMOJI.get(outcome, "⚡")
     label = _OUTCOME_LABEL.get(outcome, outcome)
     edge_pct = edge * 100
@@ -88,7 +92,7 @@ def _format_signal_message(
 
 
 def _load_pending_signals() -> dict:
-    """Load pending signals (belum dikonfirmasi via tombol) dari file."""
+    """Load pending signals (belum dikonfirmasi via tombol) dari file. Caller harus pegang _pending_lock."""
     if not os.path.exists(PENDING_SIGNALS_FILE):
         return {}
     try:
@@ -99,29 +103,32 @@ def _load_pending_signals() -> dict:
 
 
 def _save_pending_signals(signals: dict) -> None:
-    """Persist pending signals ke file."""
+    """Persist pending signals ke file. Caller harus pegang _pending_lock."""
     with open(PENDING_SIGNALS_FILE, "w", encoding="utf-8") as f:
         json.dump(signals, f, indent=2, ensure_ascii=False)
 
 
 def _add_pending_signal(signal_id: str, data: dict) -> None:
     """Simpan satu sinyal yang sedang menunggu konfirmasi tombol."""
-    signals = _load_pending_signals()
-    signals[signal_id] = data
-    _save_pending_signals(signals)
+    with _pending_lock:
+        signals = _load_pending_signals()
+        signals[signal_id] = data
+        _save_pending_signals(signals)
 
 
 def get_pending_signal(signal_id: str) -> Optional[dict]:
     """Ambil detail sinyal berdasarkan signal_id (dipakai oleh listener callback)."""
-    return _load_pending_signals().get(signal_id)
+    with _pending_lock:
+        return _load_pending_signals().get(signal_id)
 
 
 def remove_pending_signal(signal_id: str) -> None:
     """Hapus sinyal dari daftar pending setelah dikonfirmasi/dilewati."""
-    signals = _load_pending_signals()
-    if signal_id in signals:
-        del signals[signal_id]
-        _save_pending_signals(signals)
+    with _pending_lock:
+        signals = _load_pending_signals()
+        if signal_id in signals:
+            del signals[signal_id]
+            _save_pending_signals(signals)
 
 
 def send_value_bet_alert(
@@ -222,12 +229,11 @@ def send_daily_summary(
         return False
 
     sports_str = ", ".join(s.replace("baseball_", "").upper() for s in sports_scanned)
-    mode = "🔴 LIVE" if not config.SIMULATION_MODE else "🟡 SIMULASI"
 
     lines = [
         "🤖 *Sportsbook Bot — Laporan Scan*",
         "",
-        f"📅 Mode: {mode}",
+        "📅 Mode: 🔴 LIVE (data riil, konfirmasi taruhan MANUAL)",
         f"🏟️ Olahraga: {sports_str}",
         f"🔍 Total pertandingan dipindai: *{total_matches}*",
         f"🎯 Sinyal value bet ditemukan: *{total_signals}*",

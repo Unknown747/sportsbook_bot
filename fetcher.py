@@ -31,6 +31,7 @@ SOLUSI YANG DIPAKAI:
 
 import logging
 import os
+import time
 from typing import Optional
 
 import requests
@@ -104,6 +105,27 @@ SPORT_TO_ODDSAPI: dict = {
     "baseball_npb": "baseball_npb",
 }
 
+# Kategori di atas dipetakan lewat GROUP OddsAPI supaya bot bisa memilih liga
+# yang SEDANG AKTIF secara dinamis (banyak liga musiman — NFL preseason,
+# WNBA, dll — sehingga key statis di atas hanya dipakai sbg preferensi/
+# fallback, bukan satu-satunya pilihan). Lihat `_resolve_sport_key`.
+SPORT_TO_GROUP: dict = {
+    "soccer": "Soccer",
+    "basketball": "Basketball",
+    "baseball": "Baseball",
+    "american-football": "American Football",
+    "cricket": "Cricket",
+}
+
+# Sport dengan key OddsAPI yang sudah spesifik (bukan musiman/grup umum) —
+# tidak perlu resolusi dinamis.
+SPORT_FIXED_KEY: dict = {
+    "baseball_kbo": "baseball_kbo",
+    "baseball_npb": "baseball_npb",
+}
+
+_ACTIVE_SPORTS_TTL_SECONDS = 3600
+
 
 class StakeFetcher:
     """
@@ -126,6 +148,8 @@ class StakeFetcher:
             }
         )
         self.odds_session = requests.Session()
+        self._active_sports_cache: Optional[list] = None
+        self._active_sports_fetched_at: float = 0.0
 
     # ------------------------------------------------------------------
     # Stake API utility methods
@@ -205,6 +229,74 @@ class StakeFetcher:
     # ------------------------------------------------------------------
     # OddsAPI (the-odds-api.com) — primary odds source
     # ------------------------------------------------------------------
+
+    def _get_active_odds_api_sports(self) -> list:
+        """
+        Ambil & cache daftar sport/liga yang SEDANG AKTIF (in-season) dari
+        OddsAPI. Di-cache selama _ACTIVE_SPORTS_TTL_SECONDS supaya tidak
+        boros kuota — daftar ini jarang berubah dalam hitungan jam.
+        """
+        now = time.time()
+        if (
+            self._active_sports_cache is not None
+            and (now - self._active_sports_fetched_at) < _ACTIVE_SPORTS_TTL_SECONDS
+        ):
+            return self._active_sports_cache
+
+        if not ODDS_API_KEY:
+            return []
+
+        try:
+            resp = self.odds_session.get(
+                f"{ODDS_API_BASE}/sports",
+                params={"apiKey": ODDS_API_KEY},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            sports = resp.json()
+            self._active_sports_cache = sports
+            self._active_sports_fetched_at = now
+            return sports
+        except requests.exceptions.RequestException as exc:
+            logger.error("OddsAPI: gagal ambil daftar liga aktif: %s", exc)
+            return self._active_sports_cache or []
+
+    def _resolve_sport_key(self, sport: str) -> Optional[str]:
+        """
+        Tentukan OddsAPI sport key yang benar-benar AKTIF untuk kategori
+        `sport` saat ini. Banyak liga musiman (NFL, WNBA, dll) — key statis
+        di SPORT_TO_ODDSAPI hanya dipakai sebagai preferensi jika liga itu
+        masih aktif; kalau tidak, bot memilih liga aktif lain di grup yang
+        sama, atau melewati kategori itu sepenuhnya jika tidak ada liga
+        aktif (bukan menebak/memakai key basi yang pasti kosong).
+        """
+        if sport in SPORT_FIXED_KEY:
+            return SPORT_FIXED_KEY[sport]
+
+        group = SPORT_TO_GROUP.get(sport)
+        if group is None:
+            return SPORT_TO_ODDSAPI.get(sport)
+
+        active_sports = self._get_active_odds_api_sports()
+        if not active_sports:
+            # Gagal ambil daftar aktif (mis. error jaringan) — fallback ke
+            # key statis, lebih baik dari pada tidak mencoba sama sekali.
+            return SPORT_TO_ODDSAPI.get(sport)
+
+        candidates = [
+            s["key"] for s in active_sports
+            if s.get("group") == group and s.get("active") and s.get("key")
+        ]
+        if not candidates:
+            logger.info(
+                "Tidak ada liga aktif untuk kategori '%s' saat ini (kemungkinan "
+                "di luar musim) — kategori dilewati, bukan pakai key basi.",
+                sport,
+            )
+            return None
+
+        preferred = SPORT_TO_ODDSAPI.get(sport)
+        return preferred if preferred in candidates else candidates[0]
 
     def _fetch_odds_api(self, sport_key: str, limit: int = 20) -> list:
         """
@@ -326,20 +418,21 @@ class StakeFetcher:
         Returns:
             List of match dicts, or [] if no data available.
         """
-        oddsapi_key = SPORT_TO_ODDSAPI.get(sport)
+        if not ODDS_API_KEY:
+            logger.debug(
+                "ODDS_API_KEY tidak diset — OddsAPI dinonaktifkan. "
+                "Set env var ODDS_API_KEY untuk data odds live."
+            )
+            return []
 
-        if ODDS_API_KEY and oddsapi_key:
+        oddsapi_key = self._resolve_sport_key(sport)
+
+        if oddsapi_key:
             logger.info("Fetching '%s' dari OddsAPI (key=%s)...", sport, oddsapi_key)
             matches = self._fetch_odds_api(oddsapi_key, limit)
             if matches:
                 logger.info("OddsAPI: %d pertandingan '%s' ditemukan.", len(matches), sport)
                 return matches
             logger.warning("OddsAPI: tidak ada data untuk '%s'.", sport)
-        else:
-            if not ODDS_API_KEY:
-                logger.debug(
-                    "ODDS_API_KEY tidak diset — OddsAPI dinonaktifkan. "
-                    "Set env var ODDS_API_KEY untuk data odds live."
-                )
 
         return []

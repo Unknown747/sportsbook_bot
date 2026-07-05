@@ -6,7 +6,8 @@ Handles bet placement via Stake.com GraphQL API and maintains bet history log.
 import json
 import logging
 import os
-from datetime import datetime, timezone
+import threading
+from datetime import date, datetime, timezone
 from typing import Optional
 
 import requests
@@ -16,6 +17,11 @@ import bot_config as config
 logger = logging.getLogger(__name__)
 
 BET_HISTORY_FILE: str = "bet_history.json"
+
+# bet_history.json ditulis dari 2 thread berbeda (loop utama & Telegram
+# listener) — lock ini mencegah race condition read-modify-write yang bisa
+# menghilangkan record taruhan.
+_history_lock = threading.Lock()
 
 CREATE_SPORTS_BET_MUTATION = """
 mutation CreateSportsBet($input: SportsBetInput!) {
@@ -55,9 +61,44 @@ def save_history(history: list) -> None:
 
 def append_bet_record(record: dict) -> None:
     """Append a single bet record to bet_history.json (used by executor & Telegram listener)."""
-    history = load_history()
-    history.append(record)
-    save_history(history)
+    with _history_lock:
+        history = load_history()
+        history.append(record)
+        save_history(history)
+
+
+def get_today_confirmed_stake_total(reference_date: date) -> float:
+    """
+    Hitung total stake (IDR) dari semua taruhan CONFIRMED_MANUAL yang
+    dicatat pada `reference_date`. Dipakai sebagai proxy risiko harian
+    (MAX_DAILY_DRAWDOWN) karena bot tidak punya data hasil/settlement
+    taruhan (hanya tahu taruhan sudah dipasang, bukan menang/kalah) —
+    jadi cap ini membatasi TOTAL EKSPOSUR harian, bukan kerugian riil.
+
+    Args:
+        reference_date: Tanggal (date object) yang ingin dihitung totalnya.
+
+    Returns:
+        Total stake_idr (IDR) dari record CONFIRMED_MANUAL hari itu.
+    """
+    with _history_lock:
+        history = load_history()
+
+    total = 0.0
+    for record in history:
+        if record.get("status") != "CONFIRMED_MANUAL":
+            continue
+        timestamp = record.get("timestamp", "")
+        try:
+            record_date = datetime.fromisoformat(timestamp).date()
+        except ValueError:
+            continue
+        if record_date == reference_date:
+            try:
+                total += float(record.get("stake_idr") or 0.0)
+            except (TypeError, ValueError):
+                continue
+    return total
 
 
 class StakeExecutor:
