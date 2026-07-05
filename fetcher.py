@@ -40,6 +40,9 @@ import bot_config as config
 
 logger = logging.getLogger(__name__)
 
+# ODDS_API_KEY dibaca dari config (yang sudah load .env via python-dotenv).
+# Jangan duplikat os.environ.get di sini — selalu pakai config.ODDS_API_KEY.
+
 # ---------------------------------------------------------------------------
 # Queries yang TERBUKTI bekerja di Stake API
 # ---------------------------------------------------------------------------
@@ -92,7 +95,6 @@ query AllSportBets($limit: Int) {
 # Set ODDS_API_KEY di environment variable untuk mengaktifkan
 # ---------------------------------------------------------------------------
 
-ODDS_API_KEY: str = os.environ.get("ODDS_API_KEY", "")
 ODDS_API_BASE: str = "https://api.the-odds-api.com/v4"
 
 SPORT_TO_ODDSAPI: dict = {
@@ -243,13 +245,13 @@ class StakeFetcher:
         ):
             return self._active_sports_cache
 
-        if not ODDS_API_KEY:
+        if not config.ODDS_API_KEY:
             return []
 
         try:
             resp = self.odds_session.get(
                 f"{ODDS_API_BASE}/sports",
-                params={"apiKey": ODDS_API_KEY},
+                params={"apiKey": config.ODDS_API_KEY},
                 timeout=15,
             )
             resp.raise_for_status()
@@ -309,14 +311,14 @@ class StakeFetcher:
         Returns:
             List of match dicts in bot format, or [] on failure.
         """
-        if not ODDS_API_KEY:
+        if not config.ODDS_API_KEY:
             return []
 
         try:
             resp = self.odds_session.get(
                 f"{ODDS_API_BASE}/sports/{sport_key}/odds",
                 params={
-                    "apiKey": ODDS_API_KEY,
+                    "apiKey": config.ODDS_API_KEY,
                     "regions": "eu,us,au",
                     "markets": "h2h",
                     "oddsFormat": "decimal",
@@ -332,6 +334,9 @@ class StakeFetcher:
                 return []
             if resp.status_code == 422:
                 logger.warning("OddsAPI: sport '%s' tidak tersedia.", sport_key)
+                return []
+            if resp.status_code == 429:
+                logger.warning("OddsAPI: rate limit tercapai (HTTP 429) — coba lagi nanti.")
                 return []
 
             resp.raise_for_status()
@@ -418,7 +423,7 @@ class StakeFetcher:
         Returns:
             List of match dicts, or [] if no data available.
         """
-        if not ODDS_API_KEY:
+        if not config.ODDS_API_KEY:
             logger.debug(
                 "ODDS_API_KEY tidak diset — OddsAPI dinonaktifkan. "
                 "Set env var ODDS_API_KEY untuk data odds live."

@@ -7,7 +7,10 @@ import json
 import logging
 import os
 import threading
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+# WIB = UTC+7 — dipakai secara konsisten untuk reset harian & drawdown tracking.
+_WIB = timezone(timedelta(hours=7))
 from typing import Optional
 
 import requests
@@ -90,8 +93,12 @@ def get_today_confirmed_stake_total(reference_date: date) -> float:
             continue
         timestamp = record.get("timestamp", "")
         try:
-            record_date = datetime.fromisoformat(timestamp).date()
-        except ValueError:
+            # Konversi ke WIB supaya reset harian konsisten dengan jam scan (WIB).
+            dt = datetime.fromisoformat(timestamp)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            record_date = dt.astimezone(_WIB).date()
+        except (ValueError, TypeError):
             continue
         if record_date == reference_date:
             try:
@@ -138,7 +145,7 @@ class StakeExecutor:
         Returns:
             Response dict with keys: success (bool), data (dict), error (str|None).
         """
-        timestamp = datetime.now(timezone.utc).isoformat()
+        timestamp = datetime.now(_WIB).isoformat()
 
         base_record = {
             "timestamp": timestamp,

@@ -14,7 +14,10 @@ Saat tombol "Sudah Pasang" ditekan:
 import logging
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+# WIB = UTC+7 — timestamp konfirmasi taruhan harus konsisten dengan tanggal WIB.
+_WIB = timezone(timedelta(hours=7))
 from typing import Optional
 
 import requests
@@ -34,7 +37,12 @@ def _api_call(method: str, payload: dict) -> Optional[dict]:
     url = TELEGRAM_API_BASE.format(token=config.TELEGRAM_BOT_TOKEN, method=method)
     try:
         resp = requests.post(url, json=payload, timeout=POLL_TIMEOUT_SECONDS + 10)
-        return resp.json()
+        try:
+            return resp.json()
+        except ValueError as exc:
+            # Body bukan JSON valid (misal HTML error page dari Telegram CDN)
+            logger.error("Telegram API (%s): response bukan JSON — %s", method, exc)
+            return None
     except requests.exceptions.RequestException as exc:
         logger.error("Telegram API error (%s): %s", method, exc)
         return None
@@ -46,7 +54,7 @@ def _answer_callback(callback_query_id: str, text: str) -> None:
 
 
 def _edit_message(chat_id, message_id: int, new_text: str) -> None:
-    """Edit pesan asli (hapus tombol, tampilkan status baru)."""
+    """Edit pesan asli (hapus tombol inline, tampilkan status baru)."""
     _api_call(
         "editMessageText",
         {
@@ -54,6 +62,7 @@ def _edit_message(chat_id, message_id: int, new_text: str) -> None:
             "message_id": message_id,
             "text": new_text,
             "parse_mode": "Markdown",
+            "reply_markup": {"inline_keyboard": []},  # hapus tombol eksplisit
         },
     )
 
@@ -65,7 +74,7 @@ def _handle_placed(signal_id: str, chat_id, message_id: int, original_text: str)
         _edit_message(chat_id, message_id, original_text + "\n\n_(Sinyal ini sudah tidak berlaku)_")
         return
 
-    timestamp = datetime.now(timezone.utc).isoformat()
+    timestamp = datetime.now(_WIB).isoformat()
     record = {
         "timestamp": timestamp,
         "status": "CONFIRMED_MANUAL",
@@ -88,7 +97,7 @@ def _handle_placed(signal_id: str, chat_id, message_id: int, original_text: str)
 
     new_text = (
         original_text
-        + f"\n\n✅ *Ditandai SUDAH DIPASANG* pada {timestamp[11:16]} UTC."
+        + f"\n\n✅ *Ditandai SUDAH DIPASANG* pada {timestamp[11:16]} WIB."
     )
     _edit_message(chat_id, message_id, new_text)
     logger.info("Sinyal %s dikonfirmasi sudah dipasang oleh user.", signal_id)
@@ -124,12 +133,16 @@ def _process_update(update: dict) -> None:
         _answer_callback(callback_id, "Data tombol tidak valid.")
         return
 
+    # Jawab callback SEBELUM menjalankan handler supaya tombol Telegram
+    # berhenti loading segera (Telegram timeout callback setelah 10 detik).
+    # Teks ack sengaja netral ("Memproses…") karena persistence (file I/O)
+    # dan edit pesan belum tentu berhasil — status final tampil di pesan setelah handler selesai.
     if action == "placed":
+        _answer_callback(callback_id, "⏳ Memproses…")
         _handle_placed(signal_id, chat_id, message_id, original_text)
-        _answer_callback(callback_id, "✅ Dicatat sebagai sudah dipasang!")
     elif action == "skip":
+        _answer_callback(callback_id, "⏳ Memproses…")
         _handle_skip(signal_id, chat_id, message_id, original_text)
-        _answer_callback(callback_id, "Dilewati.")
     else:
         _answer_callback(callback_id, "Aksi tidak dikenal.")
 

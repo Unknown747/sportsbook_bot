@@ -11,7 +11,10 @@ Workflow:
 
 import logging
 import time
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
+
+# WIB = UTC+7 — konsisten dengan jam scan terjadwal.
+_WIB = timezone(timedelta(hours=7))
 from typing import List, Tuple
 
 import bot_config as config
@@ -81,9 +84,7 @@ def _is_scheduled_hour() -> bool:
     Cek apakah jam sekarang (WIB = UTC+7) termasuk jam scan terjadwal.
     Jadwal diset di config.SCHEDULED_HOURS (default [8, 14, 20]).
     """
-    now_wib = datetime.now(tz=timezone.utc).hour + 7
-    now_wib = now_wib % 24
-    return now_wib in config.SCHEDULED_HOURS
+    return datetime.now(_WIB).hour in config.SCHEDULED_HOURS
 
 
 # ── Core betting cycle ────────────────────────────────────────────────────────
@@ -108,7 +109,7 @@ def run_betting_cycle(
     Returns:
         (updated_bankroll, updated_last_reset_date)
     """
-    today = date.today()
+    today = datetime.now(_WIB).date()   # WIB — konsisten dengan jam scan & drawdown tracking
     if today != last_reset_date:
         logger.info("Hari baru — daily loss counter otomatis mulai dari 0 lagi.")
         last_reset_date = today
@@ -202,14 +203,14 @@ def run_betting_cycle(
         except Exception as exc:
             logger.error("[%s] Error: %s", match_id, exc, exc_info=True)
 
-    # Kirim ringkasan harian ke Telegram
-    if signals_sent > 0:
-        send_daily_summary(
-            total_signals=signals_sent,
-            total_matches=len(matches),
-            sports_scanned=SPORTS_TO_SCAN,
-            bankroll=current_bankroll,
-        )
+    # Kirim ringkasan harian ke Telegram (selalu — supaya user tahu scan sudah berjalan
+    # walau tidak ada value bet yang ditemukan).
+    send_daily_summary(
+        total_signals=signals_sent,
+        total_matches=len(matches),
+        sports_scanned=SPORTS_TO_SCAN,
+        bankroll=current_bankroll,
+    )
 
     return current_bankroll, last_reset_date
 
@@ -250,6 +251,8 @@ def _validate_config() -> None:
         raise ValueError("KELLY_MULTIPLIER harus antara 0 dan 1.")
     if not (0 < config.MAX_DAILY_DRAWDOWN <= 1):
         raise ValueError("MAX_DAILY_DRAWDOWN harus antara 0 dan 1.")
+    if not config.SCHEDULED_HOURS:
+        raise ValueError("SCHEDULED_HOURS tidak boleh kosong — harus ada minimal 1 jam scan.")
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
@@ -275,11 +278,11 @@ def main() -> None:
 
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
-    last_reset_date: date = date.today()
+    last_reset_date: date = datetime.now(_WIB).date()
     last_scan_hour: int = -1     # hindari scan ganda dalam jam yang sama
 
     while True:
-        now_wib_hour = (datetime.now(tz=timezone.utc).hour + 7) % 24
+        now_wib_hour = datetime.now(_WIB).hour
 
         if _is_scheduled_hour() and now_wib_hour != last_scan_hour:
             logger.info("=== JAM SCAN (WIB %02d:00) — memulai siklus ===", now_wib_hour)
