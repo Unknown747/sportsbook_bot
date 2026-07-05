@@ -1,1 +1,40 @@
-[]
+[
+  {
+    "timestamp": "2026-07-05T09:42:11.266866+00:00",
+    "active_odds_id": "odds_audit_001",
+    "stake_idr": 3000.0,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match": "Alpha vs Beta",
+      "outcome": "Home"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_odds_audit_001_2026-07-05T09:42:11.266866+00:00",
+      "status": "SIMULATED",
+      "amount": 3000.0,
+      "currency": "idr",
+      "createdAt": "2026-07-05T09:42:11.266866+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T09:42:11.273550+00:00",
+    "active_odds_id": "odds_audit_002",
+    "stake_idr": 5000.0,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match": "Gamma vs Delta",
+      "outcome": "Away"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_odds_audit_002_2026-07-05T09:42:11.273550+00:00",
+      "status": "SIMULATED",
+      "amount": 5000.0,
+      "currency": "idr",
+      "createdAt": "2026-07-05T09:42:11.273550+00:00"
+    }
+  }
+]

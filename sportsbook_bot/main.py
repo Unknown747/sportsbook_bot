@@ -193,6 +193,26 @@ def run_betting_cycle(
     return current_bankroll, daily_loss, last_reset_date
 
 
+def _validate_config() -> None:
+    """Validate critical configuration before starting the bot."""
+    if not config.SIMULATION_MODE and not config.STAKE_API_KEY:
+        raise EnvironmentError(
+            "STAKE_API_KEY tidak ditemukan di environment variable. "
+            "Set secret STAKE_API_KEY atau aktifkan SIMULATION_MODE=True."
+        )
+    if config.STAKE_API_KEY:
+        logger.info("API key terdeteksi (****%s).", config.STAKE_API_KEY[-4:])
+    else:
+        logger.warning("STAKE_API_KEY kosong — hanya SIMULATION_MODE yang aman dijalankan.")
+
+    if config.MIN_BET_IDR >= config.MAX_BET_IDR:
+        raise ValueError("MIN_BET_IDR harus lebih kecil dari MAX_BET_IDR.")
+    if not (0 < config.KELLY_MULTIPLIER <= 1):
+        raise ValueError("KELLY_MULTIPLIER harus antara 0 dan 1.")
+    if not (0 < config.MAX_DAILY_DRAWDOWN <= 1):
+        raise ValueError("MAX_DAILY_DRAWDOWN harus antara 0 dan 1.")
+
+
 def main() -> None:
     """Entry point — starts the 10-minute auto-betting loop."""
     logger.info("=" * 60)
@@ -200,6 +220,7 @@ def main() -> None:
     logger.info("Simulation mode: %s", config.SIMULATION_MODE)
     logger.info("Initial bankroll: Rp%.2f", config.INITIAL_BANKROLL)
     logger.info("=" * 60)
+    _validate_config()
 
     executor = StakeExecutor()
     current_bankroll: float = config.INITIAL_BANKROLL
