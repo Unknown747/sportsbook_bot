@@ -132,5 +132,101 @@
       "currency": "idr",
       "createdAt": "2026-07-05T10:17:16.870152+00:00"
     }
+  },
+  {
+    "timestamp": "2026-07-05T10:27:36.849558+00:00",
+    "active_odds_id": "2991d31eedcff470d7105f7237e66e03_away",
+    "stake_idr": 2023.7442530342182,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "2991d31eedcff470d7105f7237e66e03",
+      "home_team": "Los Angeles Dodgers",
+      "away_team": "San Diego Padres",
+      "outcome": "Away",
+      "odds": 2.96,
+      "edge": 0.134,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_2991d31eedcff470d7105f7237e66e03_away_2026-07-05T10:27:36.849558+00:00",
+      "status": "SIMULATED",
+      "amount": 2023.7442530342182,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:27:36.849558+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:27:36.856292+00:00",
+    "active_odds_id": "54f91bf5767bbff2f9bb1f444a6fc510_home",
+    "stake_idr": 2574.9480962134185,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "54f91bf5767bbff2f9bb1f444a6fc510",
+      "home_team": "Toronto Tempo",
+      "away_team": "Dallas Wings",
+      "outcome": "Home",
+      "odds": 2.74,
+      "edge": 0.1635,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_54f91bf5767bbff2f9bb1f444a6fc510_home_2026-07-05T10:27:36.856292+00:00",
+      "status": "SIMULATED",
+      "amount": 2574.9480962134185,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:27:36.856292+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:27:36.873413+00:00",
+    "active_odds_id": "9c39120f2059c1fee0df606e5979d967_away",
+    "stake_idr": 4196.677035878357,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "9c39120f2059c1fee0df606e5979d967",
+      "home_team": "Minnesota Lynx",
+      "away_team": "Connecticut Sun",
+      "outcome": "Away",
+      "odds": 12.2,
+      "edge": 0.3853,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_9c39120f2059c1fee0df606e5979d967_away_2026-07-05T10:27:36.873413+00:00",
+      "status": "SIMULATED",
+      "amount": 4196.677035878357,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:27:36.873413+00:00"
+    }
+  },
+  {
+    "timestamp": "2026-07-05T10:27:36.889087+00:00",
+    "active_odds_id": "17c2c125d3a09be8b2325104455f900c_away",
+    "stake_idr": 2575.213745856324,
+    "currency": "idr",
+    "simulation": true,
+    "match_info": {
+      "match_id": "17c2c125d3a09be8b2325104455f900c",
+      "home_team": "KT Wiz",
+      "away_team": "Lotte Giants",
+      "outcome": "Away",
+      "odds": 3.4,
+      "edge": 0.1818,
+      "type": "value_bet"
+    },
+    "status": "SIMULATED",
+    "response": {
+      "id": "sim_17c2c125d3a09be8b2325104455f900c_away_2026-07-05T10:27:36.889087+00:00",
+      "status": "SIMULATED",
+      "amount": 2575.213745856324,
+      "currency": "idr",
+      "createdAt": "2026-07-05T10:27:36.889087+00:00"
+    }
   }
 ]

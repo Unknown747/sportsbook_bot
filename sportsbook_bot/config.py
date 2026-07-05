@@ -5,17 +5,31 @@ Contains all constants, API settings, and risk management parameters.
 
 import os
 
-INITIAL_BANKROLL: float = 100000.0
+# ── Bankroll & risk management ────────────────────────────────────────────────
+INITIAL_BANKROLL: float = 100_000.0
 KELLY_MULTIPLIER: float = 0.10
 MIN_VALUE_EDGE: float = 0.05
-MIN_BET_IDR: float = 2000.0
-MAX_BET_IDR: float = 5000.0
+MIN_BET_IDR: float = 2_000.0
+MAX_BET_IDR: float = 5_000.0
 MAX_DAILY_DRAWDOWN: float = 0.10
 
+# ── Stake API ─────────────────────────────────────────────────────────────────
 STAKE_API_URL: str = "https://stake.com/_api/graphql"
 STAKE_API_KEY: str = os.environ.get("STAKE_API_KEY", "")
 STAKE_CURRENCY: str = "idr"
 
+# ── Mode ──────────────────────────────────────────────────────────────────────
 SIMULATION_MODE: bool = True
 
-LOOP_INTERVAL_SECONDS: int = 600
+# ── Scheduling ────────────────────────────────────────────────────────────────
+# Jam berapa bot scan pertama kali setiap hari (WIB = UTC+7).
+# Set SCHEDULED_HOURS ke list jam; e.g. [8, 14, 20] = 3x sehari.
+SCHEDULED_HOURS: list = [8, 14, 20]
+LOOP_INTERVAL_SECONDS: int = 600        # cek ulang setiap 10 menit
+
+# ── Telegram Alert ────────────────────────────────────────────────────────────
+# Dapatkan token dari @BotFather di Telegram, chat_id dari @userinfobot.
+TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
+# Minimum edge sebelum alert Telegram dikirim (bisa beda dari MIN_VALUE_EDGE).
+TELEGRAM_MIN_EDGE: float = 0.05
