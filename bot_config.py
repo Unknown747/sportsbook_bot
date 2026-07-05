@@ -1,9 +1,20 @@
 """
 Configuration module for Sportsbook Auto Betting Agent.
 Contains all constants, API settings, and risk management parameters.
+
+Di Replit, variabel diambil dari Secrets. Di VPS/server sendiri, taruh
+variabel di file `.env` (lihat `.env.example`) — akan otomatis terbaca
+lewat python-dotenv jika file itu ada.
 """
 
 import os
+
+try:
+    from dotenv import load_dotenv
+
+    load_dotenv()
+except ImportError:
+    pass
 
 # ── Bankroll & risk management ────────────────────────────────────────────────
 INITIAL_BANKROLL: float = 100_000.0

@@ -2,10 +2,15 @@
 Telegram Notifier module untuk Sportsbook Prediction Bot.
 
 Mengirim sinyal VALUE BET langsung ke HP via Telegram Bot API.
-Pesan berisi: Tim, Prediksi, Odds Stake, Rekomendasi modal (Kelly), Link Stake.
+Pesan berisi: Tim, Prediksi, Odds Stake, Rekomendasi modal (Kelly), Link Stake,
+dan tombol interaktif (inline keyboard) — TIDAK perlu ketik command apapun.
 """
 
+import json
 import logging
+import os
+import uuid
+from datetime import datetime, timezone
 from typing import Optional
 
 import requests
@@ -15,6 +20,8 @@ import bot_config as config
 logger = logging.getLogger(__name__)
 
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
+
+PENDING_SIGNALS_FILE = "pending_signals.json"
 
 SPORT_TO_STAKE_URL: dict = {
     "baseball_mlb":               "https://stake.com/sports/baseball/mlb",
@@ -80,6 +87,43 @@ def _format_signal_message(
     return "\n".join(lines)
 
 
+def _load_pending_signals() -> dict:
+    """Load pending signals (belum dikonfirmasi via tombol) dari file."""
+    if not os.path.exists(PENDING_SIGNALS_FILE):
+        return {}
+    try:
+        with open(PENDING_SIGNALS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {}
+
+
+def _save_pending_signals(signals: dict) -> None:
+    """Persist pending signals ke file."""
+    with open(PENDING_SIGNALS_FILE, "w", encoding="utf-8") as f:
+        json.dump(signals, f, indent=2, ensure_ascii=False)
+
+
+def _add_pending_signal(signal_id: str, data: dict) -> None:
+    """Simpan satu sinyal yang sedang menunggu konfirmasi tombol."""
+    signals = _load_pending_signals()
+    signals[signal_id] = data
+    _save_pending_signals(signals)
+
+
+def get_pending_signal(signal_id: str) -> Optional[dict]:
+    """Ambil detail sinyal berdasarkan signal_id (dipakai oleh listener callback)."""
+    return _load_pending_signals().get(signal_id)
+
+
+def remove_pending_signal(signal_id: str) -> None:
+    """Hapus sinyal dari daftar pending setelah dikonfirmasi/dilewati."""
+    signals = _load_pending_signals()
+    if signal_id in signals:
+        del signals[signal_id]
+        _save_pending_signals(signals)
+
+
 def send_value_bet_alert(
     home_team: str,
     away_team: str,
@@ -92,7 +136,8 @@ def send_value_bet_alert(
     opp_type: str = "value_bet",
 ) -> bool:
     """
-    Kirim notifikasi value bet ke Telegram.
+    Kirim notifikasi value bet ke Telegram, lengkap dengan tombol interaktif
+    "✅ Sudah Pasang" dan "⏭️ Lewati" — tidak perlu ketik command apapun.
 
     Returns:
         True jika berhasil, False jika gagal atau Telegram belum dikonfigurasi.
@@ -113,12 +158,37 @@ def send_value_bet_alert(
         opp_type=opp_type,
     )
 
+    signal_id = uuid.uuid4().hex[:12]
+    _add_pending_signal(
+        signal_id,
+        {
+            "home_team": home_team,
+            "away_team": away_team,
+            "outcome": outcome,
+            "odds": odds,
+            "edge": edge,
+            "kelly_stake": kelly_stake,
+            "ai_prob": ai_prob,
+            "sport_key": sport_key,
+            "opp_type": opp_type,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
+
     url = TELEGRAM_API_BASE.format(token=config.TELEGRAM_BOT_TOKEN, method="sendMessage")
     payload = {
         "chat_id": config.TELEGRAM_CHAT_ID,
         "text": message,
         "parse_mode": "Markdown",
         "disable_web_page_preview": False,
+        "reply_markup": {
+            "inline_keyboard": [
+                [
+                    {"text": "✅ Sudah Pasang", "callback_data": f"placed:{signal_id}"},
+                    {"text": "⏭️ Lewati", "callback_data": f"skip:{signal_id}"},
+                ]
+            ]
+        },
     }
 
     try:
@@ -128,9 +198,11 @@ def send_value_bet_alert(
             return True
         else:
             logger.warning("Telegram gagal: %s — %s", resp.status_code, resp.text[:200])
+            remove_pending_signal(signal_id)
             return False
     except requests.exceptions.RequestException as exc:
         logger.error("Telegram request error: %s", exc)
+        remove_pending_signal(signal_id)
         return False
 
 

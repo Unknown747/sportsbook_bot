@@ -19,6 +19,7 @@ from bet_sizer import calculate_idr_stake
 from executor import StakeExecutor
 from fetcher import StakeFetcher
 from predictor import get_ensemble_prediction, get_multi_agent_consensus
+from telegram_listener import start_listener
 from telegram_notifier import (
     send_daily_summary,
     send_value_bet_alert,
@@ -333,6 +334,7 @@ def main() -> None:
     # Test koneksi Telegram saat startup
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         test_telegram_connection()
+        start_listener()
 
     executor = StakeExecutor()
     fetcher = StakeFetcher()

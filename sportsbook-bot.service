@@ -1,0 +1,18 @@
+[Unit]
+Description=Sportsbook Auto Betting Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=botuser
+WorkingDirectory=/home/botuser/sportsbook-bot
+EnvironmentFile=/home/botuser/sportsbook-bot/.env
+ExecStart=/home/botuser/sportsbook-bot/venv/bin/python main.py
+Restart=always
+RestartSec=10
+StandardOutput=append:/home/botuser/sportsbook-bot/bot.log
+StandardError=append:/home/botuser/sportsbook-bot/bot.log
+
+[Install]
+WantedBy=multi-user.target

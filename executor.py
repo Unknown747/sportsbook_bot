@@ -30,6 +30,36 @@ mutation CreateSportsBet($input: SportsBetInput!) {
 """
 
 
+def ensure_history_file() -> None:
+    """Initialize bet history file if it does not exist."""
+    if not os.path.exists(BET_HISTORY_FILE):
+        with open(BET_HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump([], f)
+
+
+def load_history() -> list:
+    """Load existing bet history from file."""
+    ensure_history_file()
+    try:
+        with open(BET_HISTORY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return []
+
+
+def save_history(history: list) -> None:
+    """Persist bet history to file."""
+    with open(BET_HISTORY_FILE, "w", encoding="utf-8") as f:
+        json.dump(history, f, indent=2, ensure_ascii=False)
+
+
+def append_bet_record(record: dict) -> None:
+    """Append a single bet record to bet_history.json (used by executor & Telegram listener)."""
+    history = load_history()
+    history.append(record)
+    save_history(history)
+
+
 class StakeExecutor:
     """Handles Stake.com bet placement and history tracking."""
 
@@ -42,32 +72,11 @@ class StakeExecutor:
                 "Connection": "keep-alive",
             }
         )
-        self._ensure_history_file()
-
-    def _ensure_history_file(self) -> None:
-        """Initialize bet history file if it does not exist."""
-        if not os.path.exists(BET_HISTORY_FILE):
-            with open(BET_HISTORY_FILE, "w", encoding="utf-8") as f:
-                json.dump([], f)
-
-    def _load_history(self) -> list:
-        """Load existing bet history from file."""
-        try:
-            with open(BET_HISTORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return []
-
-    def _save_history(self, history: list) -> None:
-        """Persist bet history to file."""
-        with open(BET_HISTORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(history, f, indent=2, ensure_ascii=False)
+        ensure_history_file()
 
     def _log_bet(self, record: dict) -> None:
         """Append a bet record to bet_history.json."""
-        history = self._load_history()
-        history.append(record)
-        self._save_history(history)
+        append_bet_record(record)
 
     def place_stake_bet(
         self,

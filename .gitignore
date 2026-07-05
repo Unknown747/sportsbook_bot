@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.pyc
+bet_history.json
+pending_signals.json
+.cache/
+.pythonlibs/
