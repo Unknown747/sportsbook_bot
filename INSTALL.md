@@ -98,7 +98,7 @@ export STAKE_API_KEY="api-key-kamu-di-sini"
 
 ## Langkah 5 — Konfigurasi Bot
 
-Edit file `sportsbook_bot/config.py` sesuai kebutuhan:
+Edit file `bot_config.py` sesuai kebutuhan:
 
 ```python
 # Saldo awal simulasi (dalam IDR)
@@ -151,15 +151,18 @@ Bot akan berjalan otomatis setiap **10 menit** dan menampilkan log seperti:
 
 ## Struktur File Project
 
+Semua modul diletakkan langsung di root (tidak dalam folder) agar tidak ada folder yang namanya bentrok dengan script:
+
 ```
-sportsbook_bot/
-├── config.py           # Semua konfigurasi & konstanta
-├── predictor.py        # Prediksi AI (Ensemble ML + Multi-Agent LLM)
-├── arbitrage_finder.py # Pencari value bet & arbitrase
-├── bet_sizer.py        # Kalkulator Kelly Criterion (IDR)
-├── executor.py         # Klien GraphQL Stake.com + logger taruhan
-└── main.py             # Orkestrator utama (loop 10 menit)
 main.py                 # Entry point root
+bot_main.py             # Orkestrator utama (loop 10 menit)
+bot_config.py           # Semua konfigurasi & konstanta
+predictor.py            # Prediksi AI (Ensemble ML + Multi-Agent LLM)
+arbitrage_finder.py     # Pencari value bet & arbitrase
+bet_sizer.py            # Kalkulator Kelly Criterion (IDR)
+executor.py             # Klien GraphQL Stake.com + logger taruhan
+fetcher.py              # Pengambil data odds (OddsAPI / Stake)
+telegram_notifier.py    # Pengirim notifikasi Telegram
 requirements.txt        # Dependensi Python
 bet_history.json        # Log otomatis semua taruhan (dibuat saat pertama run)
 INSTALL.md              # Panduan ini
@@ -221,7 +224,7 @@ Setiap taruhan (simulasi maupun live) otomatis tersimpan di `bet_history.json`:
 Ketika kamu sudah yakin bot berjalan dengan benar:
 
 1. Pastikan `STAKE_API_KEY` sudah diisi dengan key yang valid
-2. Edit `sportsbook_bot/config.py`:
+2. Edit `bot_config.py`:
    ```python
    SIMULATION_MODE: bool = False
    ```

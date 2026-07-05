@@ -36,7 +36,7 @@ from typing import Optional
 
 import requests
 
-from sportsbook_bot import config
+import bot_config as config
 
 logger = logging.getLogger(__name__)
 

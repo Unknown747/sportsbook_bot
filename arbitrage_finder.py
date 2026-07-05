@@ -5,7 +5,7 @@ Scans multi-bookmaker odds for value bets and arbitrage opportunities.
 
 from typing import Dict, List
 
-from sportsbook_bot import config
+import bot_config as config
 
 
 def _implicit_prob(odds: float) -> float:

@@ -3,7 +3,7 @@ Bet sizer module for Sportsbook Auto Betting Agent.
 Calculates IDR stake using Fractional Kelly Criterion with hard limits and drawdown protection.
 """
 
-from sportsbook_bot import config
+import bot_config as config
 
 
 def calculate_idr_stake(

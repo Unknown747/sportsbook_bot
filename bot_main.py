@@ -13,13 +13,13 @@ import time
 from datetime import date, datetime, timezone
 from typing import Dict, List, Tuple
 
-from sportsbook_bot import config
-from sportsbook_bot.arbitrage_finder import scan_opportunities
-from sportsbook_bot.bet_sizer import calculate_idr_stake
-from sportsbook_bot.executor import StakeExecutor
-from sportsbook_bot.fetcher import StakeFetcher
-from sportsbook_bot.predictor import get_ensemble_prediction, get_multi_agent_consensus
-from sportsbook_bot.telegram_notifier import (
+import bot_config as config
+from arbitrage_finder import scan_opportunities
+from bet_sizer import calculate_idr_stake
+from executor import StakeExecutor
+from fetcher import StakeFetcher
+from predictor import get_ensemble_prediction, get_multi_agent_consensus
+from telegram_notifier import (
     send_daily_summary,
     send_value_bet_alert,
     test_telegram_connection,
@@ -30,7 +30,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
 )
-logger = logging.getLogger("sportsbook_bot.main")
+logger = logging.getLogger("bot_main")
 
 SPORTS_TO_SCAN: List[str] = [
     "baseball",
