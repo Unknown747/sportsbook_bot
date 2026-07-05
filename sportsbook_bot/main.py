@@ -12,6 +12,7 @@ from sportsbook_bot import config
 from sportsbook_bot.arbitrage_finder import scan_opportunities
 from sportsbook_bot.bet_sizer import calculate_idr_stake
 from sportsbook_bot.executor import StakeExecutor
+from sportsbook_bot.fetcher import StakeFetcher
 from sportsbook_bot.predictor import get_ensemble_prediction, get_multi_agent_consensus
 
 logging.basicConfig(
@@ -21,15 +22,17 @@ logging.basicConfig(
 )
 logger = logging.getLogger("sportsbook_bot.main")
 
+SPORTS_TO_SCAN = ["soccer", "basketball", "tennis"]
+
 
 def _get_sample_matches() -> list:
     """
-    Return a list of sample match data for demonstration/simulation.
-    In production this would be replaced by a live data feed from Stake or a data provider.
+    Fallback sample data used when the Stake API returns no results.
+    Also used as demonstration data in SIMULATION_MODE without a valid API key.
     """
     return [
         {
-            "match_id": "match_001",
+            "match_id": "sample_001",
             "home_team": "Team Alpha",
             "away_team": "Team Beta",
             "home_strength": 60.0,
@@ -41,13 +44,13 @@ def _get_sample_matches() -> list:
                 "bookmaker_b": {"Home": 1.90, "Draw": 3.40, "Away": 4.10},
             },
             "active_odds_ids": {
-                "Home": "odds_001_home",
-                "Draw": "odds_001_draw",
-                "Away": "odds_001_away",
+                "Home": "odds_sample_001_home",
+                "Draw": "odds_sample_001_draw",
+                "Away": "odds_sample_001_away",
             },
         },
         {
-            "match_id": "match_002",
+            "match_id": "sample_002",
             "home_team": "Team Gamma",
             "away_team": "Team Delta",
             "home_strength": 50.0,
@@ -59,16 +62,46 @@ def _get_sample_matches() -> list:
                 "bookmaker_b": {"Home": 2.75, "Draw": 3.20, "Away": 2.55},
             },
             "active_odds_ids": {
-                "Home": "odds_002_home",
-                "Draw": "odds_002_draw",
-                "Away": "odds_002_away",
+                "Home": "odds_sample_002_home",
+                "Draw": "odds_sample_002_draw",
+                "Away": "odds_sample_002_away",
             },
         },
     ]
 
 
+def _fetch_all_matches(fetcher: StakeFetcher) -> list:
+    """
+    Fetch live/upcoming matches across all configured sports.
+    Falls back to sample data if API returns nothing.
+
+    Args:
+        fetcher: StakeFetcher instance.
+
+    Returns:
+        Combined list of match dicts from all sports, or sample data as fallback.
+    """
+    all_matches: list = []
+    for sport in SPORTS_TO_SCAN:
+        try:
+            matches = fetcher.fetch_live_matches(sport=sport, limit=20)
+            all_matches.extend(matches)
+        except Exception as exc:
+            logger.error("Error fetching '%s' matches: %s", sport, exc)
+
+    if not all_matches:
+        logger.warning(
+            "Tidak ada data live dari Stake API — menggunakan sample data sebagai fallback."
+        )
+        return _get_sample_matches()
+
+    logger.info("Total %d pertandingan live/upcoming dari semua cabang olahraga.", len(all_matches))
+    return all_matches
+
+
 def run_betting_cycle(
     executor: StakeExecutor,
+    fetcher: StakeFetcher,
     current_bankroll: float,
     daily_loss: float,
     last_reset_date: date,
@@ -78,6 +111,7 @@ def run_betting_cycle(
 
     Args:
         executor: StakeExecutor instance.
+        fetcher: StakeFetcher instance for live data.
         current_bankroll: Current balance in IDR.
         daily_loss: Cumulative loss for today in IDR.
         last_reset_date: The date daily_loss was last reset.
@@ -87,15 +121,16 @@ def run_betting_cycle(
     """
     today = date.today()
     if today != last_reset_date:
-        logger.info("New day detected — resetting daily loss counter.")
+        logger.info("Hari baru terdeteksi — mereset daily loss counter.")
         daily_loss = 0.0
         last_reset_date = today
 
-    matches = _get_sample_matches()
-    logger.info("Processing %d matches this cycle.", len(matches))
+    matches = _fetch_all_matches(fetcher)
+    logger.info("Memproses %d pertandingan dalam siklus ini.", len(matches))
 
     for match in matches:
         match_id = match["match_id"]
+        label = f"{match.get('home_team', '?')} vs {match.get('away_team', '?')}"
         try:
             ensemble_probs: Dict[str, float] = get_ensemble_prediction(match)
             consensus_probs: Dict[str, float] = get_multi_agent_consensus(match)
@@ -108,8 +143,9 @@ def run_betting_cycle(
             ai_probs: Dict[str, float] = {k: v / total for k, v in blended.items()}
 
             logger.info(
-                "[%s] AI Probs => Home:%.3f Draw:%.3f Away:%.3f",
+                "[%s] %s | AI: Home=%.3f Draw=%.3f Away=%.3f",
                 match_id,
+                label,
                 ai_probs["Home"],
                 ai_probs["Draw"],
                 ai_probs["Away"],
@@ -118,7 +154,7 @@ def run_betting_cycle(
             opportunities = scan_opportunities(match["odds_data"], ai_probs)
 
             if not opportunities:
-                logger.info("[%s] No value bets or arbitrage found this cycle.", match_id)
+                logger.info("[%s] Tidak ada value bet / arbitrage.", match_id)
                 continue
 
             for opp in opportunities:
@@ -129,9 +165,9 @@ def run_betting_cycle(
                 opp_type = opp["type"]
 
                 logger.info(
-                    "[%s] Opportunity: %s | %s | Odds:%.2f | Edge:%.4f | Platform:%s",
+                    "[%s] %s | %s @ %.2f | edge=%.4f | platform=%s",
                     match_id,
-                    opp_type,
+                    opp_type.upper(),
                     outcome,
                     odds,
                     edge,
@@ -147,16 +183,15 @@ def run_betting_cycle(
 
                 if stake == 0.0:
                     logger.info(
-                        "[%s] Bet skipped (stake=0): drawdown limit or Kelly below minimum.",
+                        "[%s] Bet dilewati (stake=0): drawdown limit atau Kelly terlalu kecil.",
                         match_id,
                     )
                     continue
 
                 logger.info(
-                    "[%s] Placing bet => %s on %s | Stake: Rp%.2f",
+                    "[%s] Memasang taruhan => %s | Stake: Rp%.2f",
                     match_id,
                     outcome,
-                    platform,
                     stake,
                 )
 
@@ -178,16 +213,16 @@ def run_betting_cycle(
                 if result["success"]:
                     daily_loss += stake
                     logger.info(
-                        "[%s] Bet registered. Daily loss so far: Rp%.2f",
+                        "[%s] Bet terdaftar. Total daily loss: Rp%.2f",
                         match_id,
                         daily_loss,
                     )
                 else:
-                    logger.warning("[%s] Bet failed: %s", match_id, result["error"])
+                    logger.warning("[%s] Bet gagal: %s", match_id, result["error"])
 
         except Exception as exc:
             logger.error(
-                "[%s] Unexpected error processing match: %s", match_id, exc, exc_info=True
+                "[%s] Error memproses pertandingan: %s", match_id, exc, exc_info=True
             )
 
     return current_bankroll, daily_loss, last_reset_date
@@ -219,28 +254,31 @@ def main() -> None:
     logger.info("Sportsbook Auto Betting Agent starting.")
     logger.info("Simulation mode: %s", config.SIMULATION_MODE)
     logger.info("Initial bankroll: Rp%.2f", config.INITIAL_BANKROLL)
+    logger.info("Sports dipantau: %s", ", ".join(SPORTS_TO_SCAN))
     logger.info("=" * 60)
     _validate_config()
 
     executor = StakeExecutor()
+    fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
     daily_loss: float = 0.0
     last_reset_date: date = date.today()
 
     while True:
-        logger.info("--- Starting new betting cycle ---")
+        logger.info("--- Memulai siklus betting baru ---")
         try:
             current_bankroll, daily_loss, last_reset_date = run_betting_cycle(
                 executor=executor,
+                fetcher=fetcher,
                 current_bankroll=current_bankroll,
                 daily_loss=daily_loss,
                 last_reset_date=last_reset_date,
             )
         except Exception as exc:
-            logger.critical("Critical error in main loop: %s", exc, exc_info=True)
+            logger.critical("Error kritis di main loop: %s", exc, exc_info=True)
 
         logger.info(
-            "Cycle complete. Sleeping %d seconds until next run.",
+            "Siklus selesai. Tidur %d detik sampai run berikutnya.",
             config.LOOP_INTERVAL_SECONDS,
         )
         time.sleep(config.LOOP_INTERVAL_SECONDS)
