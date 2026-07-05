@@ -1,93 +1,83 @@
 """
 Predictor module for Sportsbook Auto Betting Agent.
-Provides ensemble ML simulation and multi-agent LLM consensus for 3-way match predictions.
+
+Menghitung probabilitas "fair" (nilai sebenarnya) murni dari data odds pasar
+real yang sudah diambil dari OddsAPI — TIDAK ADA angka acak/simulasi di sini.
+
+Metode: Wisdom-of-the-crowd devigging.
+  1. Ambil odds dari semua bookmaker riil yang tersedia untuk pertandingan itu.
+  2. Ubah setiap odds jadi peluang implisit (1/odds).
+  3. Rata-ratakan peluang implisit lintas bookmaker per outcome (konsensus pasar).
+  4. Hilangkan overround/vig (normalisasi supaya total = 1.0) -> peluang "fair".
+
+Kalau pasar yakin outcome A punya peluang lebih tinggi daripada yang
+ditawarkan Stake, itulah value bet -- edge dihitung di `arbitrage_finder.py`
+dari selisih peluang fair ini dengan peluang implisit odds Stake.
+
+Match tanpa odds bookmaker yang cukup (misal cuma 1 bookmaker) TIDAK bisa
+diberi prediksi yang valid -- caller harus skip match tersebut, bukan
+menebak-nebak.
 """
 
-import random
-from typing import Dict
+from typing import Dict, Optional
+
+MIN_BOOKMAKERS_REQUIRED: int = 2
 
 
-def _normalize(probs: Dict[str, float]) -> Dict[str, float]:
-    """Normalize probability dict so values sum to 1.0."""
-    total = sum(probs.values())
-    if total == 0:
-        return {"Home": 1 / 3, "Draw": 1 / 3, "Away": 1 / 3}
-    return {k: v / total for k, v in probs.items()}
+def _implied_prob(odds: float) -> float:
+    """Konversi odds desimal ke peluang implisit."""
+    if odds is None or odds <= 1.0:
+        return 0.0
+    return 1.0 / odds
 
 
-def get_ensemble_prediction(match_data: dict) -> Dict[str, float]:
+def get_market_consensus_prediction(match_data: dict) -> Optional[Dict[str, float]]:
     """
-    Simulate an ensemble ML model prediction for a 3-way match outcome.
+    Hitung peluang "fair" dari konsensus multi-bookmaker (real market data).
 
     Args:
-        match_data: Dictionary containing match metadata (teams, league, form, etc.)
+        match_data: Harus mengandung `odds_data_all` -- dict per-bookmaker
+            odds (bukan cuma "best"/"stake"), contoh:
+            {
+                "stake": {"Home": 1.85, "Away": 2.05},
+                "pinnacle": {"Home": 1.90, "Away": 2.00},
+                "bet365": {"Home": 1.88, "Away": 2.02},
+            }
 
     Returns:
-        Normalized probability dict: {"Home": float, "Draw": float, "Away": float}
+        Dict peluang fair per outcome (jumlah = 1.0), atau None jika data
+        odds tidak cukup (kurang dari MIN_BOOKMAKERS_REQUIRED bookmaker) --
+        artinya match ini HARUS dilewati, bukan diprediksi dengan tebakan.
     """
-    home_strength = match_data.get("home_strength", 50.0)
-    away_strength = match_data.get("away_strength", 50.0)
-    league_factor = match_data.get("league_draw_rate", 0.25)
+    odds_by_bookmaker: dict = match_data.get("odds_data_all") or {}
 
-    home_advantage = 0.05
-    base_home = home_strength / (home_strength + away_strength) + home_advantage
-    base_away = away_strength / (home_strength + away_strength)
+    if len(odds_by_bookmaker) < MIN_BOOKMAKERS_REQUIRED:
+        return None
 
-    noise = random.uniform(-0.03, 0.03)
-    raw = {
-        "Home": max(0.0, base_home + noise),
-        "Draw": max(0.0, league_factor + random.uniform(-0.02, 0.02)),
-        "Away": max(0.0, base_away - noise),
-    }
-    return _normalize(raw)
+    outcomes = set()
+    for book_odds in odds_by_bookmaker.values():
+        outcomes.update(book_odds.keys())
 
+    if not outcomes:
+        return None
 
-def get_multi_agent_consensus(match_data: dict) -> Dict[str, float]:
-    """
-    Simulate a multi-agent LLM consensus among three analytical agents.
+    sums: Dict[str, float] = {o: 0.0 for o in outcomes}
+    counts: Dict[str, int] = {o: 0 for o in outcomes}
 
-    Agents:
-      - Statistician: Focuses on historical stats and form.
-      - Tactician: Evaluates tactical matchups.
-      - Sentiment Analyst: Evaluates news, injuries, morale signals.
+    for book_odds in odds_by_bookmaker.values():
+        for outcome, odds in book_odds.items():
+            implied = _implied_prob(odds)
+            if implied > 0.0:
+                sums[outcome] += implied
+                counts[outcome] += 1
 
-    Args:
-        match_data: Dictionary containing match metadata.
+    if any(counts[o] == 0 for o in outcomes):
+        return None
 
-    Returns:
-        Normalized probability dict: {"Home": float, "Draw": float, "Away": float}
-    """
-    home_strength = match_data.get("home_strength", 50.0)
-    away_strength = match_data.get("away_strength", 50.0)
-    home_advantage = 0.05
+    avg_implied = {o: sums[o] / counts[o] for o in outcomes}
+    total = sum(avg_implied.values())
 
-    base_home = home_strength / (home_strength + away_strength)
-    base_away = away_strength / (home_strength + away_strength)
-    base_draw = match_data.get("league_draw_rate", 0.25)
+    if total <= 0.0:
+        return None
 
-    statistician: Dict[str, float] = {
-        "Home": base_home + home_advantage + random.uniform(-0.02, 0.02),
-        "Draw": base_draw + random.uniform(-0.01, 0.01),
-        "Away": base_away + random.uniform(-0.02, 0.02),
-    }
-
-    tactician: Dict[str, float] = {
-        "Home": base_home + home_advantage * 1.2 + random.uniform(-0.03, 0.03),
-        "Draw": base_draw * 0.9 + random.uniform(-0.01, 0.02),
-        "Away": base_away * 0.95 + random.uniform(-0.02, 0.03),
-    }
-
-    sentiment_bias = match_data.get("sentiment_home_bias", 0.0)
-    sentiment: Dict[str, float] = {
-        "Home": base_home + sentiment_bias + random.uniform(-0.02, 0.02),
-        "Draw": base_draw + random.uniform(-0.02, 0.02),
-        "Away": base_away - sentiment_bias * 0.5 + random.uniform(-0.02, 0.02),
-    }
-
-    agents = [statistician, tactician, sentiment]
-    consensus: Dict[str, float] = {}
-    for outcome in ("Home", "Draw", "Away"):
-        values = [max(0.0, agent[outcome]) for agent in agents]
-        consensus[outcome] = sum(values) / len(values)
-
-    return _normalize(consensus)
+    return {o: v / total for o, v in avg_implied.items()}

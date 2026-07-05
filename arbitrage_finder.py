@@ -1,6 +1,9 @@
 """
 Arbitrage finder module for Sportsbook Auto Betting Agent.
-Scans multi-bookmaker odds for value bets and arbitrage opportunities.
+
+Mengevaluasi value bet berdasarkan odds RIIL Stake dibanding peluang "fair"
+hasil konsensus pasar (dari `predictor.get_market_consensus_prediction`).
+Tidak ada data buatan/acak di modul ini.
 """
 
 from typing import Dict, List
@@ -15,68 +18,43 @@ def _implicit_prob(odds: float) -> float:
     return 1.0 / odds
 
 
-def scan_opportunities(odds_data: dict, ai_probs: Dict[str, float]) -> List[dict]:
+def scan_opportunities(stake_odds: Dict[str, float], fair_probs: Dict[str, float]) -> List[dict]:
     """
-    Scan for arbitrage and value bet opportunities across multiple bookmakers.
+    Cari value bet: outcome di mana peluang fair (konsensus pasar riil) lebih
+    tinggi daripada peluang implisit odds Stake untuk outcome yang sama.
 
     Args:
-        odds_data: Dict of bookmaker -> outcome -> decimal odds.
-                   Example:
-                   {
-                       "stake": {"Home": 2.10, "Draw": 3.40, "Away": 3.20},
-                       "bookmaker_b": {"Home": 2.05, "Draw": 3.50, "Away": 3.30},
-                   }
-        ai_probs: Normalized 3-way probability dict from predictor.
+        stake_odds: Odds riil Stake per outcome, contoh {"Home": 1.85, "Away": 2.05}.
+        fair_probs: Peluang fair (konsensus multi-bookmaker riil, jumlah = 1.0).
 
     Returns:
-        List of opportunity dicts with keys:
-            - type: "value_bet" or "arbitrage"
-            - outcome: "Home" | "Draw" | "Away"
-            - platform: bookmaker name with best odds
-            - best_odds: float
-            - ai_prob: float
-            - implied_prob: float
-            - edge: float (positive = value)
+        List of opportunity dicts (type selalu "value_bet", platform selalu
+        "stake" karena hanya itu yang bisa dieksekusi user):
+            - outcome, platform, best_odds, ai_prob, implied_prob, edge
     """
     opportunities: List[dict] = []
 
-    best_odds: Dict[str, tuple] = {}
-    for bookmaker, outcomes in odds_data.items():
-        for outcome, odds in outcomes.items():
-            if outcome not in best_odds or odds > best_odds[outcome][1]:
-                best_odds[outcome] = (bookmaker, odds)
+    for outcome, odds in stake_odds.items():
+        if odds <= 1.0:
+            continue
 
-    for outcome, (platform, odds) in best_odds.items():
+        fair_prob = fair_probs.get(outcome)
+        if fair_prob is None or fair_prob <= 0.0:
+            continue
+
         implied = _implicit_prob(odds)
-        ai_prob = ai_probs.get(outcome, 0.0)
-        edge = ai_prob - implied
+        edge = fair_prob - implied
 
         if edge >= config.MIN_VALUE_EDGE:
             opportunities.append(
                 {
                     "type": "value_bet",
                     "outcome": outcome,
-                    "platform": platform,
+                    "platform": "stake",
                     "best_odds": odds,
-                    "ai_prob": round(ai_prob, 4),
+                    "ai_prob": round(fair_prob, 4),
                     "implied_prob": round(implied, 4),
                     "edge": round(edge, 4),
-                }
-            )
-
-    total_implied = sum(_implicit_prob(v[1]) for v in best_odds.values())
-    if total_implied < 1.0 and len(best_odds) == 3:
-        arb_profit = round((1.0 - total_implied) * 100, 4)
-        for outcome, (platform, odds) in best_odds.items():
-            opportunities.append(
-                {
-                    "type": "arbitrage",
-                    "outcome": outcome,
-                    "platform": platform,
-                    "best_odds": odds,
-                    "ai_prob": round(ai_probs.get(outcome, 0.0), 4),
-                    "implied_prob": round(_implicit_prob(odds), 4),
-                    "edge": round(arb_profit, 4),
                 }
             )
 

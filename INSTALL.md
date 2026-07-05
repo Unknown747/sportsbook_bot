@@ -48,9 +48,9 @@ Dependensi yang diinstall:
 
 ---
 
-## Langkah 3b — (Opsional) Daftar OddsAPI untuk Data Odds Live
+## Langkah 3b — Daftar OddsAPI (WAJIB — bot tidak punya data buatan/fallback)
 
-Stake.com membatasi akses odds pertandingan melalui API key — odds live hanya bisa diambil melalui penyedia data eksternal. Bot mendukung **the-odds-api.com** (gratis 500 request/bulan):
+Stake.com membatasi akses odds pertandingan melalui API key — odds live hanya bisa diambil melalui penyedia data eksternal. Bot menggunakan **the-odds-api.com** (gratis 500 request/bulan) sebagai satu-satunya sumber data:
 
 1. Daftar di [the-odds-api.com](https://the-odds-api.com)
 2. Salin API key kamu
@@ -60,12 +60,11 @@ Stake.com membatasi akses odds pertandingan melalui API key — odds live hanya 
    Value: <odds-api-key-kamu>
    ```
 
-Tanpa `ODDS_API_KEY`, bot tetap berjalan menggunakan **sample data** (aman untuk simulasi dan testing).
-
-| Mode | ODDS_API_KEY | Sumber Data |
-|---|---|---|
-| Simulasi penuh | Tidak perlu | Sample data bawaan |
-| Live odds | Wajib diset | the-odds-api.com |
+> ⚠️ **Wajib diisi.** Bot ini TIDAK memiliki data sample/simulasi sebagai
+> fallback — kalau `ODDS_API_KEY` tidak diset, atau tidak ada data odds
+> riil yang cukup (minimal 2 bookmaker per pertandingan, termasuk Stake),
+> bot akan melewati siklus tersebut tanpa mengirim sinyal apa pun. Ini
+> sengaja dirancang begitu supaya tidak ada sinyal palsu yang terkirim.
 
 ---
 
@@ -157,7 +156,7 @@ Semua modul diletakkan langsung di root (tidak dalam folder) agar tidak ada fold
 main.py                 # Entry point root
 bot_main.py             # Orkestrator utama (loop 10 menit)
 bot_config.py           # Semua konfigurasi & konstanta
-predictor.py            # Prediksi AI (Ensemble ML + Multi-Agent LLM)
+predictor.py            # Peluang fair dari konsensus multi-bookmaker riil (bukan simulasi/acak)
 arbitrage_finder.py     # Pencari value bet & arbitrase
 bet_sizer.py            # Kalkulator Kelly Criterion (IDR)
 executor.py             # Klien GraphQL Stake.com + logger taruhan
@@ -201,9 +200,11 @@ Setiap taruhan (simulasi maupun live) otomatis tersimpan di `bet_history.json`:
 
 | Masalah | Solusi |
 |---|---|
+| `ODDS_API_KEY tidak ditemukan` | Bot butuh ini untuk berjalan — set environment variable, lihat Langkah 3b |
 | `STAKE_API_KEY tidak ditemukan` | Pastikan environment variable sudah di-set dengan benar |
 | `ModuleNotFoundError: requests` | Jalankan `pip install -r requirements.txt` |
-| Bot tidak menemukan value bet | Normal — bot hanya taruhan jika edge ≥ 5% |
+| Bot tidak menemukan value bet | Normal — bot hanya kirim sinyal jika edge ≥ 5% dari data riil |
+| "Data odds riil tidak cukup — dilewati" | Normal — pertandingan itu tidak punya cukup bookmaker riil untuk dihitung, bukan bug |
 | Bot berhenti di tengah jalan | Cek koneksi internet; bot otomatis resume di siklus berikutnya |
 | `bet_history.json` tidak ada | File dibuat otomatis saat pertama kali bot dijalankan |
 
@@ -213,24 +214,32 @@ Setiap taruhan (simulasi maupun live) otomatis tersimpan di `bet_history.json`:
 
 - ✅ API key **tidak pernah** disimpan langsung di kode
 - ✅ API key dibaca dari environment variable
-- ✅ Mode simulasi aktif by default — tidak ada risiko taruhan tidak sengaja
-- ✅ Setiap taruhan tercatat lengkap di `bet_history.json`
-- ✅ Drawdown protection: bot otomatis berhenti jika rugi harian ≥ 10% bankroll
+- ✅ Tidak ada data buatan/sample — semua sinyal berasal dari odds pasar riil
+- ✅ Setiap taruhan (simulasi maupun konfirmasi manual) tercatat lengkap di `bet_history.json`
+- ✅ Drawdown protection: bot otomatis berhenti mengusulkan stake jika rugi harian ≥ 10% bankroll
 
 ---
 
-## Dari Simulasi ke Live Betting
+## Catatan Penting Soal "Live Betting" Otomatis
 
-Ketika kamu sudah yakin bot berjalan dengan benar:
+Bot ini **TIDAK BISA memasang taruhan secara otomatis ke Stake.com**. Ini
+bukan keterbatasan kode, melainkan pembatasan dari platform Stake sendiri:
 
-1. Pastikan `STAKE_API_KEY` sudah diisi dengan key yang valid
-2. Edit `bot_config.py`:
-   ```python
-   SIMULATION_MODE: bool = False
-   ```
-3. Jalankan ulang bot:
-   ```bash
-   python main.py
-   ```
+- API key Stake hanya memberi akses ke game casino & data akun — tidak ada
+  akses ke market/odds ID sportsbook riil (`activeOddsId`) yang dibutuhkan
+  untuk memasang taruhan lewat API.
+- Situs stake.com dilindungi Cloudflare sehingga scraping otomatis diblokir
+  (403 di setiap percobaan).
 
-> ⚠️ **Peringatan:** Taruhan mengandung risiko kehilangan uang. Gunakan bot ini dengan bijak dan hanya dengan dana yang siap kamu tanggung risikonya.
+Karena itu, arsitektur bot ini adalah **sinyal live + eksekusi manual**:
+1. Bot menghitung value bet dari data odds pasar **100% riil** (tidak ada simulasi/random).
+2. Sinyal dikirim ke Telegram lengkap dengan tombol.
+3. Kamu memasang taruhan **secara manual** di aplikasi/situs Stake kamu sendiri.
+4. Kamu tekan tombol "✅ Sudah Pasang" di Telegram untuk mencatatnya ke riwayat.
+
+`SIMULATION_MODE=True` (default) hanya memengaruhi *logging* internal
+(`executor.py`) — bukan komponen yang menentukan apakah sinyal kamu nyata
+atau tidak. Sinyal yang kamu terima di Telegram **selalu** dihitung dari
+data pasar riil, baik `SIMULATION_MODE` bernilai `True` maupun `False`.
+
+> ⚠️ **Peringatan:** Taruhan mengandung risiko kehilangan uang. Gunakan sinyal bot ini sebagai alat bantu analisis, bukan jaminan profit, dan hanya bertaruh dengan dana yang siap kamu tanggung risikonya.

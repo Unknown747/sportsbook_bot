@@ -10,7 +10,7 @@ All modules live flat at the project root (no subpackage) to avoid a folder/scri
 main.py                 # Root entry point
 bot_main.py             # Core orchestrator with 10-minute loop
 bot_config.py           # API config, IDR limits, risk management constants
-predictor.py            # Ensemble ML + Multi-Agent LLM consensus predictions
+predictor.py            # Peluang fair dari konsensus multi-bookmaker riil (bukan simulasi/acak)
 arbitrage_finder.py     # 3-way match scanner for value bets & arbitrage
 bet_sizer.py            # Fractional Kelly Criterion calculator with drawdown protection
 executor.py             # Stake GraphQL API client & bet history logger

@@ -29,8 +29,16 @@ STAKE_API_URL: str = "https://stake.com/_api/graphql"
 STAKE_API_KEY: str = os.environ.get("STAKE_API_KEY", "")
 STAKE_CURRENCY: str = "idr"
 
+# ── OddsAPI (sumber data odds riil — wajib untuk mode live) ────────────────────
+ODDS_API_KEY: str = os.environ.get("ODDS_API_KEY", "")
+
 # ── Mode ──────────────────────────────────────────────────────────────────────
-SIMULATION_MODE: bool = True
+# Catatan penting: Stake.com TIDAK menyediakan market/odds ID sportsbook riil
+# via API, dan situsnya diblok Cloudflare untuk scraping — jadi eksekusi bet
+# otomatis ke Stake tidak bisa dijalankan sungguhan. Bot ini berjalan sebagai
+# sinyal LIVE (data riil, tanpa fallback palsu) + konfirmasi taruhan MANUAL
+# oleh user lewat tombol Telegram.
+SIMULATION_MODE: bool = os.environ.get("SIMULATION_MODE", "True").strip().lower() != "false"
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
 # Jam berapa bot scan pertama kali setiap hari (WIB = UTC+7).

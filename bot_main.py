@@ -1,24 +1,24 @@
 """
 Main orchestrator untuk Sportsbook Prediction Bot.
 
-Workflow (sesuai blueprint):
-  1. Scan jadwal & odds dari OddsAPI.
-  2. Hitung probabilitas AI & deteksi value bet.
-  3. Kirim sinyal ke Telegram (taruhan dilakukan MANUAL oleh user).
-  4. Opsional: auto-place jika SIMULATION_MODE=False & STAKE_API_KEY aktif.
+Workflow:
+  1. Scan jadwal & odds RIIL dari OddsAPI (tanpa fallback data buatan).
+  2. Hitung peluang fair dari konsensus multi-bookmaker riil & deteksi value bet
+     terhadap odds Stake.
+  3. Kirim sinyal ke Telegram — taruhan dipasang MANUAL oleh user dan
+     dikonfirmasi lewat tombol (Stake tidak mendukung eksekusi otomatis).
 """
 
 import logging
 import time
 from datetime import date, datetime, timezone
-from typing import Dict, List, Tuple
+from typing import List, Tuple
 
 import bot_config as config
 from arbitrage_finder import scan_opportunities
 from bet_sizer import calculate_idr_stake
-from executor import StakeExecutor
 from fetcher import StakeFetcher
-from predictor import get_ensemble_prediction, get_multi_agent_consensus
+from predictor import get_market_consensus_prediction
 from telegram_listener import start_listener
 from telegram_notifier import (
     send_daily_summary,
@@ -43,62 +43,16 @@ SPORTS_TO_SCAN: List[str] = [
 ]
 
 
-# ── Fallback sample data ──────────────────────────────────────────────────────
-
-def _get_sample_matches() -> list:
-    """
-    Fallback sample data (3-way soccer) ketika OddsAPI tidak ada data aktif.
-    """
-    return [
-        {
-            "match_id": "sample_001",
-            "home_team": "Team Alpha",
-            "away_team": "Team Beta",
-            "home_strength": 60.0,
-            "away_strength": 40.0,
-            "league_draw_rate": 0.28,
-            "sentiment_home_bias": 0.02,
-            "is_3way": True,
-            "sport": "soccer_epl",
-            "odds_data": {
-                "stake": {"Home": 1.85, "Draw": 3.50, "Away": 4.20},
-                "bookmaker_b": {"Home": 1.90, "Draw": 3.40, "Away": 4.10},
-            },
-            "active_odds_ids": {
-                "Home": "odds_sample_001_home",
-                "Draw": "odds_sample_001_draw",
-                "Away": "odds_sample_001_away",
-            },
-        },
-        {
-            "match_id": "sample_002",
-            "home_team": "Team Gamma",
-            "away_team": "Team Delta",
-            "home_strength": 50.0,
-            "away_strength": 55.0,
-            "league_draw_rate": 0.30,
-            "sentiment_home_bias": -0.01,
-            "is_3way": True,
-            "sport": "soccer_epl",
-            "odds_data": {
-                "stake": {"Home": 2.80, "Draw": 3.10, "Away": 2.50},
-                "bookmaker_b": {"Home": 2.75, "Draw": 3.20, "Away": 2.55},
-            },
-            "active_odds_ids": {
-                "Home": "odds_sample_002_home",
-                "Draw": "odds_sample_002_draw",
-                "Away": "odds_sample_002_away",
-            },
-        },
-    ]
-
-
 # ── Data fetching ─────────────────────────────────────────────────────────────
 
 def _fetch_all_matches(fetcher: StakeFetcher) -> list:
     """
     Ambil pertandingan live/upcoming dari semua cabang olahraga.
-    Fallback ke sample data jika API tidak mengembalikan apapun.
+
+    TIDAK ADA fallback data buatan — kalau tidak ada data riil dari OddsAPI
+    (misal kuota habis atau tidak ada pertandingan aktif), siklus akan
+    dilewati sepenuhnya. Bot live tidak boleh mengirim sinyal berdasarkan
+    data palsu.
     """
     all_matches: list = []
     for sport in SPORTS_TO_SCAN:
@@ -109,8 +63,11 @@ def _fetch_all_matches(fetcher: StakeFetcher) -> list:
             logger.error("Error fetching '%s' matches: %s", sport, exc)
 
     if not all_matches:
-        logger.warning("Tidak ada data live — menggunakan sample data sebagai fallback.")
-        return _get_sample_matches()
+        logger.warning(
+            "Tidak ada data live/riil dari OddsAPI untuk sport manapun — "
+            "siklus dilewati (tidak ada sinyal palsu yang dikirim)."
+        )
+        return []
 
     logger.info("Total %d pertandingan live/upcoming dari semua sport.", len(all_matches))
     return all_matches
@@ -131,7 +88,6 @@ def _is_scheduled_hour() -> bool:
 # ── Core betting cycle ────────────────────────────────────────────────────────
 
 def run_betting_cycle(
-    executor: StakeExecutor,
     fetcher: StakeFetcher,
     current_bankroll: float,
     daily_loss: float,
@@ -139,10 +95,10 @@ def run_betting_cycle(
 ) -> Tuple[float, float, date]:
     """
     Jalankan satu siklus analisis lengkap:
-      1. Fetch pertandingan.
-      2. Hitung probabilitas AI & deteksi value bet.
-      3. Kirim sinyal Telegram.
-      4. (Opsional) Auto-place bet jika SIMULATION_MODE=False.
+      1. Fetch pertandingan (data odds riil dari OddsAPI — tidak ada fallback palsu).
+      2. Hitung peluang fair dari konsensus multi-bookmaker riil & deteksi value bet.
+      3. Kirim sinyal Telegram (taruhan dipasang MANUAL oleh user, lalu dikonfirmasi
+         lewat tombol — Stake tidak mendukung eksekusi taruhan otomatis via API).
 
     Returns:
         (updated_bankroll, updated_daily_loss, updated_last_reset_date)
@@ -164,40 +120,32 @@ def run_betting_cycle(
         sport_key: str = match.get("sport", "unknown")
 
         try:
-            ensemble_probs: Dict[str, float] = get_ensemble_prediction(match)
-            consensus_probs: Dict[str, float] = get_multi_agent_consensus(match)
+            fair_probs = get_market_consensus_prediction(match)
 
-            # 2-way (baseball/basketball) vs 3-way (soccer) probability normalization
-            is_3way: bool = match.get("is_3way", True)
-            active_outcomes = ["Home", "Draw", "Away"] if is_3way else ["Home", "Away"]
+            if fair_probs is None:
+                logger.info(
+                    "[%s] %s | Data odds riil tidak cukup (<2 bookmaker) — dilewati.",
+                    match_id, label,
+                )
+                continue
 
-            blended: Dict[str, float] = {
-                k: (ensemble_probs.get(k, 0.0) + consensus_probs.get(k, 0.0)) / 2.0
-                for k in active_outcomes
-            }
-            total = sum(blended.values())
-            ai_probs: Dict[str, float] = (
-                {k: v / total for k, v in blended.items()}
-                if total > 0
-                else {k: 1.0 / len(active_outcomes) for k in active_outcomes}
-            )
-
+            is_3way: bool = match.get("is_3way", False)
             if is_3way:
                 logger.info(
-                    "[%s] %s | AI: H=%.3f D=%.3f A=%.3f",
+                    "[%s] %s | Fair (konsensus pasar): H=%.3f D=%.3f A=%.3f",
                     match_id, label,
-                    ai_probs["Home"], ai_probs.get("Draw", 0.0), ai_probs["Away"],
+                    fair_probs.get("Home", 0.0), fair_probs.get("Draw", 0.0), fair_probs.get("Away", 0.0),
                 )
             else:
                 logger.info(
-                    "[%s] %s | AI: H=%.3f A=%.3f (2-way)",
-                    match_id, label, ai_probs["Home"], ai_probs["Away"],
+                    "[%s] %s | Fair (konsensus pasar): H=%.3f A=%.3f (2-way)",
+                    match_id, label, fair_probs.get("Home", 0.0), fair_probs.get("Away", 0.0),
                 )
 
-            opportunities = scan_opportunities(match["odds_data"], ai_probs)
+            opportunities = scan_opportunities(match["stake_odds"], fair_probs)
 
             if not opportunities:
-                logger.info("[%s] Tidak ada value bet / arbitrage.", match_id)
+                logger.info("[%s] Tidak ada value bet di Stake untuk match ini.", match_id)
                 continue
 
             for opp in opportunities:
@@ -205,12 +153,11 @@ def run_betting_cycle(
                 odds: float = opp["best_odds"]
                 edge: float = opp["edge"]
                 opp_type: str = opp["type"]
-                platform: str = opp["platform"]
-                ai_prob: float = ai_probs.get(outcome, 0.5)
+                ai_prob: float = opp["ai_prob"]
 
                 logger.info(
-                    "[%s] %s | %s @ %.2f | edge=%.4f | platform=%s",
-                    match_id, opp_type.upper(), outcome, odds, edge, platform,
+                    "[%s] %s | %s @ %.2f | edge=%.4f | platform=stake",
+                    match_id, opp_type.upper(), outcome, odds, edge,
                 )
 
                 stake = calculate_idr_stake(
@@ -229,7 +176,7 @@ def run_betting_cycle(
                     match_id, label, outcome, odds, stake,
                 )
 
-                # ── Kirim Telegram alert ──────────────────────────────────
+                # ── Kirim Telegram alert (taruhan dipasang MANUAL oleh user) ──
                 if float(edge) >= config.TELEGRAM_MIN_EDGE:
                     sent = send_value_bet_alert(
                         home_team=match["home_team"],
@@ -244,31 +191,6 @@ def run_betting_cycle(
                     )
                     if sent:
                         signals_sent += 1
-
-                # ── Auto-place bet (opsional) ─────────────────────────────
-                active_odds_id = match["active_odds_ids"].get(outcome, "unknown_id")
-                result = executor.place_stake_bet(
-                    active_odds_id=active_odds_id,
-                    target_stake=stake,
-                    match_info={
-                        "match_id": match_id,
-                        "home_team": match["home_team"],
-                        "away_team": match["away_team"],
-                        "outcome": outcome,
-                        "odds": odds,
-                        "edge": edge,
-                        "type": opp_type,
-                    },
-                )
-
-                if result["success"]:
-                    daily_loss += stake
-                    logger.info(
-                        "[%s] Bet terdaftar. Daily loss total: Rp%.2f",
-                        match_id, daily_loss,
-                    )
-                else:
-                    logger.warning("[%s] Bet gagal: %s", match_id, result.get("error", "unknown"))
 
         except Exception as exc:
             logger.error("[%s] Error: %s", match_id, exc, exc_info=True)
@@ -289,15 +211,23 @@ def run_betting_cycle(
 
 def _validate_config() -> None:
     """Validasi konfigurasi penting sebelum bot start."""
-    if not config.SIMULATION_MODE and not config.STAKE_API_KEY:
+    if not config.ODDS_API_KEY:
         raise EnvironmentError(
-            "STAKE_API_KEY tidak ditemukan. Set secret atau aktifkan SIMULATION_MODE=True."
+            "ODDS_API_KEY tidak ditemukan. Bot butuh data odds riil untuk berjalan "
+            "live — set secret ODDS_API_KEY sebelum menjalankan bot."
         )
-    mode_label = "SIMULASI" if config.SIMULATION_MODE else "LIVE"
-    logger.info("Mode: %s", mode_label)
+
+    logger.info("Mode sinyal: LIVE (data 100%% dari OddsAPI, tidak ada data buatan).")
 
     if config.STAKE_API_KEY:
         logger.info("Stake API key: ****%s", config.STAKE_API_KEY[-4:])
+
+    logger.warning(
+        "Eksekusi taruhan otomatis ke Stake TIDAK didukung (API Stake tidak "
+        "menyediakan market/odds ID sportsbook riil, dan situsnya diblok "
+        "Cloudflare untuk scraping). Semua taruhan harus dipasang MANUAL "
+        "oleh user setelah menerima sinyal Telegram."
+    )
 
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         logger.info("Telegram: aktif (chat_id=%s...)", str(config.TELEGRAM_CHAT_ID)[:6])
@@ -336,7 +266,6 @@ def main() -> None:
         test_telegram_connection()
         start_listener()
 
-    executor = StakeExecutor()
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
     daily_loss: float = 0.0
@@ -351,7 +280,6 @@ def main() -> None:
             last_scan_hour = now_wib_hour
             try:
                 current_bankroll, daily_loss, last_reset_date = run_betting_cycle(
-                    executor=executor,
                     fetcher=fetcher,
                     current_bankroll=current_bankroll,
                     daily_loss=daily_loss,

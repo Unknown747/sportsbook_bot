@@ -19,10 +19,9 @@ STATUS API STAKE SPORTSBOOK:
     - sportEvents / sportFixtures / event detail
 
 SOLUSI YANG DIPAKAI:
-  Bot menggunakan data odds dari sample/konfigurasi manual, atau dari
-  penyedia data odds pihak ketiga (OddsAPI, SportRadar, dll) yang bisa
-  dikonfigurasi di config.py. Fallback ke sample data jika tidak ada
-  sumber odds eksternal.
+  Bot menggunakan data odds RIIL dari penyedia data pihak ketiga
+  (the-odds-api.com). TIDAK ADA data buatan/sample — kalau ODDS_API_KEY
+  tidak diset atau tidak ada data odds yang cukup, match/siklus dilewati.
 
   Untuk pengembangan lebih lanjut, pertimbangkan:
   1. Odds-API (the-odds-api.com) — gratis 500 request/bulan
@@ -108,10 +107,11 @@ SPORT_TO_ODDSAPI: dict = {
 
 class StakeFetcher:
     """
-    Fetches sports match data for the betting bot.
+    Fetches REAL sports match data for the betting bot.
 
-    Primary source : OddsAPI (if ODDS_API_KEY is set)
-    Fallback       : Sample/manual data (always available)
+    Source: OddsAPI (requires ODDS_API_KEY). No fabricated/sample data —
+    if the key is missing or no real data is available, callers receive
+    an empty list and must skip the cycle.
 
     Also provides Stake API utility methods (verify auth, get user info).
     """
@@ -255,88 +255,55 @@ class StakeFetcher:
             away_name = event.get("away_team", "Away")
             event_id = event.get("id", "unknown")
 
-            # Find best odds from available bookmakers
-            best_home, best_draw, best_away = 0.0, 0.0, 0.0
-            stake_home, stake_draw, stake_away = 0.0, 0.0, 0.0
+            # Kumpulkan odds RIIL per-bookmaker (tidak ada data buatan/placeholder).
+            odds_by_bookmaker: dict = {}
+            stake_odds: dict = {}
 
             for bookie in event.get("bookmakers") or []:
+                bookie_key = bookie.get("key", "unknown")
                 for market in bookie.get("markets") or []:
                     if market.get("key") != "h2h":
                         continue
-                    bookie_odds: dict = {}
+                    bookie_outcomes: dict = {}
                     for outcome in market.get("outcomes") or []:
                         name = outcome.get("name", "")
                         price = float(outcome.get("price", 0))
+                        if price <= 1.0:
+                            continue
                         if name == home_name:
-                            bookie_odds["Home"] = price
+                            bookie_outcomes["Home"] = price
                         elif name == away_name:
-                            bookie_odds["Away"] = price
+                            bookie_outcomes["Away"] = price
                         else:
-                            bookie_odds["Draw"] = price
+                            bookie_outcomes["Draw"] = price
 
-                    if bookie.get("key") == "stake":
-                        stake_home = bookie_odds.get("Home", 0.0)
-                        stake_draw = bookie_odds.get("Draw", 0.0)
-                        stake_away = bookie_odds.get("Away", 0.0)
+                    if bookie_outcomes.get("Home") and bookie_outcomes.get("Away"):
+                        odds_by_bookmaker[bookie_key] = bookie_outcomes
+                        if bookie_key == "stake":
+                            stake_odds = bookie_outcomes
 
-                    best_home = max(best_home, bookie_odds.get("Home", 0.0))
-                    best_draw = max(best_draw, bookie_odds.get("Draw", 0.0))
-                    best_away = max(best_away, bookie_odds.get("Away", 0.0))
-
-            # Use Stake odds if available, else best from any bookmaker
-            h = stake_home or best_home
-            d = stake_draw or best_draw   # 0.0 for 2-way markets (no draw)
-            a = stake_away or best_away
-
-            # Must have at least Home and Away odds
-            if not (h > 1.0 and a > 1.0):
+            # Wajib ada odds Stake yang riil — kalau tidak, match tidak bisa
+            # dieksekusi user (dia hanya punya akun Stake), jadi dilewati.
+            if not stake_odds:
                 continue
 
-            is_3way = d > 1.0   # True for soccer; False for baseball/basketball
-
-            def _build_odds(home: float, draw: float, away: float) -> dict:
-                """Build odds dict — include Draw only if available."""
-                o: dict = {"Home": home, "Away": away}
-                if draw > 1.0:
-                    o["Draw"] = draw
-                return o
-
-            odds_data: dict = {}
-
-            # Best available odds across all bookmakers
-            best_odds = _build_odds(best_home, best_draw, best_away)
-            if best_odds:
-                odds_data["best"] = best_odds
-
-            # Stake-specific odds (only if stake bookmaker listed for this sport)
-            if stake_home > 1.0 and stake_away > 1.0:
-                stake_odds = _build_odds(stake_home, stake_draw, stake_away)
-                odds_data["stake"] = stake_odds
-
-            if not odds_data:
+            # Wajib ada minimal beberapa bookmaker lain untuk hitung konsensus
+            # pasar riil. Kalau tidak cukup, predictor akan melewati match ini
+            # sendiri — tapi kita filter di sini juga supaya hemat proses.
+            if len(odds_by_bookmaker) < 2:
                 continue
 
-            # active_odds_ids — placeholder; replaced by real Stake IDs when available
-            active_ids: dict = {
-                "Home": f"{event_id}_home",
-                "Away": f"{event_id}_away",
-            }
-            if is_3way:
-                active_ids["Draw"] = f"{event_id}_draw"
+            is_3way = "Draw" in stake_odds
 
             matches.append({
                 "match_id": event_id,
                 "home_team": home_name,
                 "away_team": away_name,
-                "home_strength": 50.0,
-                "away_strength": 50.0,
-                "league_draw_rate": 0.27 if is_3way else 0.0,
-                "sentiment_home_bias": 0.0,
                 "sport": event.get("sport_key", sport_key),
                 "is_3way": is_3way,
                 "commence_time": event.get("commence_time", ""),
-                "odds_data": odds_data,
-                "active_odds_ids": active_ids,
+                "odds_data_all": odds_by_bookmaker,
+                "stake_odds": stake_odds,
             })
 
         return matches
@@ -349,8 +316,8 @@ class StakeFetcher:
         """
         Fetch live/upcoming matches with odds for the bot pipeline.
 
-        Primary source  : OddsAPI (if ODDS_API_KEY env var is set)
-        Fallback        : Empty list (main.py will use sample data)
+        Source          : OddsAPI (requires ODDS_API_KEY env var)
+        No data         : Returns [] — caller MUST skip, no fabricated fallback
 
         Args:
             sport: Sport slug e.g. 'soccer', 'basketball', 'tennis'.
