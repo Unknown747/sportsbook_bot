@@ -37,27 +37,86 @@ for cmd in python3 python python3.12 python3.11 python3.10 python3.9; do
 done
 [ -z "$PYTHON" ] && fail "Python 3.7+ tidak ditemukan. Install dulu: sudo apt install python3"
 
-# ── 2. Cek file .env ─────────────────────────────────────────
+# ── 2. Cek / buat file .env ───────────────────────────────────
 info "Memeriksa file .env..."
 if [ ! -f ".env" ]; then
-    fail ".env tidak ditemukan di $(pwd). Buat dulu:\n  cp .env.example .env && nano .env"
-fi
-ok ".env ditemukan"
-
-# Cek key wajib tidak kosong (tanpa menampilkan nilainya)
-check_env_key() {
-    local KEY="$1"
-    local VAL
-    VAL=$(grep -E "^${KEY}=" .env 2>/dev/null | cut -d'=' -f2- | tr -d '[:space:]')
-    if [ -z "$VAL" ] || [[ "$VAL" == *"isi_dengan"* ]]; then
-        fail "${KEY} belum diisi di .env. Buka nano .env dan isi nilainya."
+    if [ -f ".env.example" ]; then
+        cp .env.example .env
+        ok ".env dibuat dari .env.example"
+    else
+        touch .env
+        ok ".env baru dibuat (kosong)"
     fi
-    ok "${KEY} terisi (${#VAL} karakter)"
+else
+    ok ".env ditemukan"
+fi
+
+# Ambil value sebuah key dari .env (tanpa menampilkan nilainya ke user)
+get_env_value() {
+    local KEY="$1"
+    grep -E "^${KEY}=" .env 2>/dev/null | tail -n1 | cut -d'=' -f2- | tr -d '[:space:]'
 }
 
-check_env_key "ODDS_API_KEY"
-check_env_key "TELEGRAM_BOT_TOKEN"
-check_env_key "TELEGRAM_CHAT_ID"
+# Set/replace sebuah key di .env
+set_env_value() {
+    local KEY="$1"
+    local VAL="$2"
+    if grep -qE "^${KEY}=" .env 2>/dev/null; then
+        # Pakai delimiter '|' karena token API bisa mengandung karakter aneh, jarang '|'
+        local ESCAPED
+        ESCAPED=$(printf '%s' "$VAL" | sed 's/[&|\\]/\\&/g')
+        sed -i "s|^${KEY}=.*|${KEY}=${ESCAPED}|" .env
+    else
+        echo "${KEY}=${VAL}" >> .env
+    fi
+}
+
+# Pastikan key wajib terisi. Kalau kosong / placeholder, minta input langsung
+# dari user (interaktif) lalu tulis ke .env — tidak perlu buka nano manual.
+prompt_env_key() {
+    local KEY="$1"
+    local LABEL="$2"
+    local REQUIRED="$3"   # "required" atau "optional"
+    local VAL
+    VAL=$(get_env_value "$KEY")
+
+    if [ -n "$VAL" ] && [[ "$VAL" != *"isi_dengan"* ]]; then
+        ok "${KEY} terisi (${#VAL} karakter)"
+        return
+    fi
+
+    if [ ! -t 0 ]; then
+        # Tidak ada terminal interaktif (mis. dijalankan lewat CI) — tidak bisa prompt.
+        if [ "$REQUIRED" = "required" ]; then
+            fail "${KEY} belum diisi di .env dan tidak ada input interaktif tersedia."
+        else
+            warn "${KEY} belum diisi — dilewati (opsional)."
+        fi
+        return
+    fi
+
+    echo ""
+    info "${LABEL}"
+    while true; do
+        read -rp "  Masukkan ${KEY}: " VAL
+        VAL=$(echo "$VAL" | tr -d '[:space:]')
+        if [ -n "$VAL" ]; then
+            break
+        fi
+        if [ "$REQUIRED" = "optional" ]; then
+            warn "${KEY} dilewati (opsional, kosong)."
+            return
+        fi
+        warn "${KEY} wajib diisi, tidak boleh kosong."
+    done
+
+    set_env_value "$KEY" "$VAL"
+    ok "${KEY} disimpan ke .env (${#VAL} karakter)"
+}
+
+prompt_env_key "ODDS_API_KEY" "API key data odds (wajib) — daftar gratis di https://the-odds-api.com" "required"
+prompt_env_key "TELEGRAM_BOT_TOKEN" "Token bot Telegram (opsional, untuk alert) — dari @BotFather" "optional"
+prompt_env_key "TELEGRAM_CHAT_ID" "Chat ID Telegram (opsional, untuk alert) — dari @userinfobot" "optional"
 
 # ── 3. Install dependencies ──────────────────────────────────
 info "Menginstall dependencies..."
