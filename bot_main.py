@@ -9,13 +9,15 @@ Workflow:
      dikonfirmasi lewat tombol (Stake tidak mendukung eksekusi otomatis).
 """
 
+import json
 import logging
+import os
 import time
 from datetime import date, datetime, timedelta, timezone
 
 # WIB = UTC+7 — konsisten dengan jam scan terjadwal.
 _WIB = timezone(timedelta(hours=7))
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import bot_config as config
 from arbitrage_finder import scan_opportunities
@@ -80,12 +82,56 @@ def _fetch_all_matches(fetcher: StakeFetcher) -> list:
 
 # ── Scheduler helper ──────────────────────────────────────────────────────────
 
-def _is_scheduled_hour() -> bool:
+SCAN_STATE_FILE = "scan_state.json"
+
+
+def _load_scan_state() -> dict:
     """
-    Cek apakah jam sekarang (WIB = UTC+7) termasuk jam scan terjadwal.
-    Jadwal diset di config.SCHEDULED_HOURS (default [8, 14, 20]).
+    Baca state scan terakhir (tanggal WIB + jam-jam yang sudah dieksekusi hari
+    itu) dari disk. Dipakai untuk catch-up scan setelah restart, supaya kalau
+    bot mati/restart tepat sesudah jam terjadwal lewat, scan hari itu tidak
+    diam-diam terlewat sampai jadwal berikutnya.
     """
-    return datetime.now(_WIB).hour in config.SCHEDULED_HOURS
+    if not os.path.exists(SCAN_STATE_FILE):
+        return {"date": None, "done_hours": []}
+    try:
+        with open(SCAN_STATE_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (json.JSONDecodeError, OSError):
+        return {"date": None, "done_hours": []}
+
+
+def _save_scan_state(state: dict) -> None:
+    """Persist state scan ke disk. Kegagalan tulis di-log tapi tidak menghentikan bot."""
+    try:
+        with open(SCAN_STATE_FILE, "w", encoding="utf-8") as f:
+            json.dump(state, f, indent=2)
+    except OSError as exc:
+        logger.error("Gagal menyimpan scan_state.json: %s", exc)
+
+
+def _get_due_scheduled_hour(state: dict) -> Optional[int]:
+    """
+    Tentukan apakah ada jam terjadwal hari ini (WIB) yang SUDAH LEWAT tapi
+    BELUM dieksekusi (misal karena bot baru restart). Reset daftar
+    `done_hours` otomatis kalau tanggal WIB sudah berganti hari.
+
+    Returns:
+        Jam (int) yang perlu di-catch-up-scan sekarang, atau None kalau tidak
+        ada yang tertunda.
+    """
+    now_wib = datetime.now(_WIB)
+    today_str = now_wib.date().isoformat()
+
+    if state.get("date") != today_str:
+        state["date"] = today_str
+        state["done_hours"] = []
+
+    done_hours = set(state.get("done_hours", []))
+    due_hours = [h for h in config.SCHEDULED_HOURS if h <= now_wib.hour and h not in done_hours]
+    if not due_hours:
+        return None
+    return max(due_hours)
 
 
 # ── Core betting cycle ────────────────────────────────────────────────────────
@@ -286,14 +332,23 @@ def main() -> None:
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
     last_reset_date: date = datetime.now(_WIB).date()
-    last_scan_hour: int = -1     # hindari scan ganda dalam jam yang sama
+    scan_state = _load_scan_state()
 
     while True:
         now_wib_hour = datetime.now(_WIB).hour
+        due_hour = _get_due_scheduled_hour(scan_state)
 
-        if _is_scheduled_hour() and now_wib_hour != last_scan_hour:
-            logger.info("=== JAM SCAN (WIB %02d:00) — memulai siklus ===", now_wib_hour)
-            last_scan_hour = now_wib_hour
+        if due_hour is not None:
+            if due_hour != now_wib_hour:
+                logger.warning(
+                    "Catch-up scan: jam %02d:00 WIB terlewat (kemungkinan bot baru "
+                    "restart) — menjalankan siklus sekarang supaya tidak diam-diam "
+                    "dilewati.",
+                    due_hour,
+                )
+            logger.info("=== JAM SCAN (WIB %02d:00) — memulai siklus ===", due_hour)
+            scan_state.setdefault("done_hours", []).append(due_hour)
+            _save_scan_state(scan_state)
             try:
                 current_bankroll, last_reset_date = run_betting_cycle(
                     fetcher=fetcher,

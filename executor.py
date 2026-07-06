@@ -1,6 +1,13 @@
 """
 Executor module for Sportsbook Auto Betting Agent.
-Handles bet placement via Stake.com GraphQL API and maintains bet history log.
+Maintains the bet history log (bet_history.json) — dipakai untuk mencatat
+konfirmasi taruhan manual dari user (via tombol Telegram) dan menghitung
+eksposur harian.
+
+Catatan: eksekusi taruhan otomatis ke Stake.com TIDAK didukung (API Stake
+tidak menyediakan market/odds ID sportsbook riil) — lihat catatan di
+fetcher.py. Kelas StakeExecutor yang lama sudah dihapus dari modul ini
+karena tidak pernah dipanggil dari mana pun.
 """
 
 import json
@@ -9,11 +16,8 @@ import os
 import threading
 from datetime import date, datetime, timedelta, timezone
 
-# WIB = UTC+7 — dipakai secara konsisten untuk reset harian & drawdown tracking.
+# WIB = UTC+7 — dipakai secara konsisten untuk reset harian & eksposur tracking.
 _WIB = timezone(timedelta(hours=7))
-from typing import Optional
-
-import requests
 
 import bot_config as config
 
@@ -25,18 +29,6 @@ BET_HISTORY_FILE: str = "bet_history.json"
 # listener) — lock ini mencegah race condition read-modify-write yang bisa
 # menghilangkan record taruhan.
 _history_lock = threading.Lock()
-
-CREATE_SPORTS_BET_MUTATION = """
-mutation CreateSportsBet($input: SportsBetInput!) {
-  createSportsBet(input: $input) {
-    id
-    status
-    amount
-    currency
-    createdAt
-  }
-}
-"""
 
 
 def ensure_history_file() -> None:
@@ -62,11 +54,34 @@ def save_history(history: list) -> None:
         json.dump(history, f, indent=2, ensure_ascii=False)
 
 
+def _prune_old_records(history: list) -> list:
+    """
+    Buang record yang lebih tua dari BET_HISTORY_RETENTION_DAYS supaya
+    bet_history.json tidak tumbuh tanpa batas. Record tanpa timestamp valid
+    tetap dipertahankan (lebih aman daripada menghapus data yang tidak jelas).
+    """
+    cutoff = datetime.now(_WIB) - timedelta(days=config.BET_HISTORY_RETENTION_DAYS)
+    kept: list = []
+    for record in history:
+        timestamp = record.get("timestamp", "")
+        try:
+            dt = datetime.fromisoformat(timestamp)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            kept.append(record)
+            continue
+        if dt.astimezone(_WIB) >= cutoff:
+            kept.append(record)
+    return kept
+
+
 def append_bet_record(record: dict) -> None:
     """Append a single bet record to bet_history.json (used by executor & Telegram listener)."""
     with _history_lock:
         history = load_history()
         history.append(record)
+        history = _prune_old_records(history)
         save_history(history)
 
 
@@ -106,103 +121,3 @@ def get_today_confirmed_stake_total(reference_date: date) -> float:
             except (TypeError, ValueError):
                 continue
     return total
-
-
-class StakeExecutor:
-    """Handles Stake.com bet placement and history tracking."""
-
-    def __init__(self) -> None:
-        self.session = requests.Session()
-        self.session.headers.update(
-            {
-                "Content-Type": "application/json",
-                "x-access-token": config.STAKE_API_KEY,
-                "Connection": "keep-alive",
-            }
-        )
-        ensure_history_file()
-
-    def _log_bet(self, record: dict) -> None:
-        """Append a bet record to bet_history.json."""
-        append_bet_record(record)
-
-    def place_stake_bet(
-        self,
-        active_odds_id: str,
-        target_stake: float,
-        match_info: Optional[dict] = None,
-    ) -> dict:
-        """
-        Place a sports bet on Stake.com via GraphQL mutation.
-
-        In SIMULATION_MODE the bet is logged without hitting the API.
-
-        Args:
-            active_odds_id: The Stake odds/market ID to bet on.
-            target_stake: Amount in IDR to wager.
-            match_info: Optional metadata about the match for history logging.
-
-        Returns:
-            Response dict with keys: success (bool), data (dict), error (str|None).
-        """
-        timestamp = datetime.now(_WIB).isoformat()
-
-        base_record = {
-            "timestamp": timestamp,
-            "active_odds_id": active_odds_id,
-            "stake_idr": target_stake,
-            "currency": config.STAKE_CURRENCY,
-            "simulation": config.SIMULATION_MODE,
-            "match_info": match_info or {},
-        }
-
-        if config.SIMULATION_MODE:
-            simulated_result = {
-                "id": f"sim_{active_odds_id}_{timestamp}",
-                "status": "SIMULATED",
-                "amount": target_stake,
-                "currency": config.STAKE_CURRENCY,
-                "createdAt": timestamp,
-            }
-            record = {**base_record, "status": "SIMULATED", "response": simulated_result}
-            self._log_bet(record)
-            logger.info("[SIMULATION] Bet logged: %s @ %.2f IDR", active_odds_id, target_stake)
-            return {"success": True, "data": simulated_result, "error": None}
-
-        payload = {
-            "query": CREATE_SPORTS_BET_MUTATION,
-            "variables": {
-                "input": {
-                    "activeOddsId": active_odds_id,
-                    "amount": target_stake,
-                    "currency": config.STAKE_CURRENCY,
-                }
-            },
-        }
-
-        try:
-            response = self.session.post(
-                config.STAKE_API_URL, json=payload, timeout=15
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            if "errors" in data:
-                error_msg = str(data["errors"])
-                record = {**base_record, "status": "API_ERROR", "error": error_msg}
-                self._log_bet(record)
-                logger.error("GraphQL error placing bet: %s", error_msg)
-                return {"success": False, "data": {}, "error": error_msg}
-
-            bet_data = data.get("data", {}).get("createSportsBet", {})
-            record = {**base_record, "status": bet_data.get("status", "UNKNOWN"), "response": bet_data}
-            self._log_bet(record)
-            logger.info("Bet placed: %s status=%s", active_odds_id, bet_data.get("status"))
-            return {"success": True, "data": bet_data, "error": None}
-
-        except requests.exceptions.RequestException as exc:
-            error_msg = str(exc)
-            record = {**base_record, "status": "REQUEST_ERROR", "error": error_msg}
-            self._log_bet(record)
-            logger.error("Request error placing bet: %s", error_msg)
-            return {"success": False, "data": {}, "error": error_msg}

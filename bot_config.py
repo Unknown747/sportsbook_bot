@@ -22,7 +22,20 @@ KELLY_MULTIPLIER: float = 0.10
 MIN_VALUE_EDGE: float = 0.05
 MIN_BET_IDR: float = 2_000.0
 MAX_BET_IDR: float = 5_000.0
+# Catatan: bot TIDAK tahu hasil menang/kalah taruhan (tidak ada data settlement),
+# jadi angka ini sebenarnya adalah batas EKSPOSUR harian (total stake yang boleh
+# dipasang per hari), bukan proteksi drawdown/kerugian riil. Nama variabel
+# dipertahankan untuk kompatibilitas, tapi baca sebagai "MAX_DAILY_EXPOSURE".
 MAX_DAILY_DRAWDOWN: float = 0.10
+
+# ── Retensi data (housekeeping) ────────────────────────────────────────────────
+# bet_history.json & pending_signals.json dipangkas otomatis supaya tidak
+# tumbuh tanpa batas — record CONFIRMED_MANUAL/SIMULATED/dsb yang lebih tua
+# dari ini akan dibuang saat file ditulis ulang. Sinyal pending (belum
+# dikonfirmasi via tombol) yang kedaluwarsa juga dibersihkan terpisah
+# (lihat PENDING_SIGNAL_MAX_AGE_HOURS).
+BET_HISTORY_RETENTION_DAYS: int = 90
+PENDING_SIGNAL_MAX_AGE_HOURS: int = 48
 
 # ── Stake API ─────────────────────────────────────────────────────────────────
 STAKE_API_URL: str = "https://stake.com/_api/graphql"
@@ -52,13 +65,8 @@ ODDS_API_LOW_QUOTA_THRESHOLD: int = 15
 # otomatis ke Stake tidak bisa dijalankan sungguhan. Bot ini SELALU berjalan
 # sebagai sinyal LIVE (data riil, tanpa fallback palsu) + konfirmasi taruhan
 # MANUAL oleh user lewat tombol Telegram — ini bukan sesuatu yang bisa
-# di-toggle lewat config.
-#
-# SIMULATION_MODE di bawah ini LEGACY: hanya dibaca oleh StakeExecutor
-# (executor.py), kelas lama untuk auto-eksekusi taruhan yang TIDAK lagi
-# dipanggil dari loop utama (lihat catatan di atas). Diset "True" secara
-# default sebagai pengaman kalau kelas itu dipakai lagi di masa depan.
-SIMULATION_MODE: bool = os.environ.get("SIMULATION_MODE", "True").strip().lower() != "false"
+# di-toggle lewat config. (SIMULATION_MODE & StakeExecutor lama sudah dihapus
+# karena tidak pernah dipanggil dari loop utama.)
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
 # Jam berapa bot scan pertama kali setiap hari (WIB = UTC+7).

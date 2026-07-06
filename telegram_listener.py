@@ -31,6 +31,11 @@ logger = logging.getLogger(__name__)
 TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}/{method}"
 POLL_TIMEOUT_SECONDS = 25
 
+# Backoff saat getUpdates gagal terus-menerus (mis. internet mati lama) —
+# supaya tidak spam retry tiap 5 detik tanpa batas selama-lamanya.
+_BACKOFF_START_SECONDS = 5
+_BACKOFF_MAX_SECONDS = 60
+
 
 def _api_call(method: str, payload: dict) -> Optional[dict]:
     """Helper untuk memanggil Telegram Bot API dan mengembalikan JSON response."""
@@ -150,6 +155,7 @@ def _process_update(update: dict) -> None:
 def _poll_loop(stop_event: threading.Event) -> None:
     """Loop polling getUpdates (long polling) selama bot berjalan."""
     offset = 0
+    backoff = _BACKOFF_START_SECONDS
     logger.info("📡 Telegram button listener aktif — menunggu klik tombol...")
 
     while not stop_event.is_set():
@@ -159,8 +165,13 @@ def _poll_loop(stop_event: threading.Event) -> None:
         )
 
         if not response or not response.get("ok"):
-            time.sleep(5)
+            # Backoff eksponensial (cap di _BACKOFF_MAX_SECONDS) supaya tidak
+            # spam retry tanpa henti saat internet/Telegram down lama.
+            time.sleep(backoff)
+            backoff = min(backoff * 2, _BACKOFF_MAX_SECONDS)
             continue
+
+        backoff = _BACKOFF_START_SECONDS  # reset setelah berhasil
 
         for update in response.get("result", []):
             offset = update["update_id"] + 1

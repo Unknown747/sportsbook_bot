@@ -3,5 +3,6 @@ __pycache__/
 *.pyc
 bet_history.json
 pending_signals.json
+scan_state.json
 .cache/
 .pythonlibs/

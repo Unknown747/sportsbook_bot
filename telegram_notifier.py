@@ -11,7 +11,7 @@ import logging
 import os
 import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 import requests
@@ -155,11 +155,35 @@ def _save_pending_signals(signals: dict) -> None:
         json.dump(signals, f, indent=2, ensure_ascii=False)
 
 
+def _prune_expired_signals(signals: dict) -> dict:
+    """
+    Buang sinyal pending yang sudah kedaluwarsa (lebih tua dari
+    PENDING_SIGNAL_MAX_AGE_HOURS) — mencegah pending_signals.json menumpuk
+    sinyal lama yang tidak akan pernah dikonfirmasi user lagi. Sinyal tanpa
+    `created_at` valid tetap dipertahankan.
+    """
+    cutoff = datetime.now(timezone.utc) - timedelta(hours=config.PENDING_SIGNAL_MAX_AGE_HOURS)
+    kept: dict = {}
+    for signal_id, data in signals.items():
+        created_at = data.get("created_at", "")
+        try:
+            dt = datetime.fromisoformat(created_at)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+        except (ValueError, TypeError):
+            kept[signal_id] = data
+            continue
+        if dt >= cutoff:
+            kept[signal_id] = data
+    return kept
+
+
 def _add_pending_signal(signal_id: str, data: dict) -> None:
     """Simpan satu sinyal yang sedang menunggu konfirmasi tombol."""
     with _pending_lock:
         signals = _load_pending_signals()
         signals[signal_id] = data
+        signals = _prune_expired_signals(signals)
         _save_pending_signals(signals)
 
 
