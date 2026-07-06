@@ -29,15 +29,60 @@ PENDING_SIGNALS_FILE = "pending_signals.json"
 _pending_lock = threading.Lock()
 
 SPORT_TO_STAKE_URL: dict = {
-    "baseball_mlb":               "https://stake.com/sports/baseball/mlb",
-    "baseball_kbo":               "https://stake.com/sports/baseball/kbo",
-    "baseball_npb":               "https://stake.com/sports/baseball/npb",
-    "basketball_wnba":            "https://stake.com/sports/basketball/wnba",
-    "americanfootball_nfl_preseason": "https://stake.com/sports/american-football/nfl",
-    "cricket_international_t20":  "https://stake.com/sports/cricket",
-    "soccer_epl":                 "https://stake.com/sports/soccer/england/premier-league",
-    "soccer_laliga":              "https://stake.com/sports/soccer/spain/laliga",
+    # Baseball
+    "baseball_mlb":                          "https://stake.com/sports/baseball/mlb",
+    "baseball_kbo":                          "https://stake.com/sports/baseball/kbo",
+    "baseball_npb":                          "https://stake.com/sports/baseball/npb",
+    # Basketball
+    "basketball_wnba":                       "https://stake.com/sports/basketball/wnba",
+    "basketball_nba":                        "https://stake.com/sports/basketball/nba",
+    # American Football
+    "americanfootball_nfl_preseason":        "https://stake.com/sports/american-football/nfl",
+    "americanfootball_nfl":                  "https://stake.com/sports/american-football/nfl",
+    # Cricket
+    "cricket_international_t20":             "https://stake.com/sports/cricket",
+    "cricket_test_match":                    "https://stake.com/sports/cricket",
+    # Soccer — semua liga yang dipantau bot
+    "soccer_epl":                            "https://stake.com/sports/soccer/england/premier-league",
+    "soccer_laliga":                         "https://stake.com/sports/soccer/spain/laliga",
+    "soccer_bundesliga":                     "https://stake.com/sports/soccer/germany/bundesliga",
+    "soccer_serie_a":                        "https://stake.com/sports/soccer/italy/serie-a",
+    "soccer_ligue_one":                      "https://stake.com/sports/soccer/france/ligue-1",
+    "soccer_brazil_campeonato":              "https://stake.com/sports/soccer/brazil/serie-a",
+    "soccer_brazil_serie_b":                 "https://stake.com/sports/soccer/brazil/serie-b",
+    "soccer_argentina_primera_division":     "https://stake.com/sports/soccer/argentina/primera-division",
+    "soccer_austria_bundesliga":             "https://stake.com/sports/soccer/austria/bundesliga",
+    "soccer_china_superleague":              "https://stake.com/sports/soccer/china/super-league",
+    "soccer_conmebol_copa_libertadores":     "https://stake.com/sports/soccer/conmebol/copa-libertadores",
+    "soccer_conmebol_copa_sudamericana":     "https://stake.com/sports/soccer/conmebol/copa-sudamericana",
+    "soccer_uefa_champs_league":             "https://stake.com/sports/soccer/europe/champions-league",
+    "soccer_uefa_europa_league":             "https://stake.com/sports/soccer/europe/europa-league",
+    "soccer_usa_mls":                        "https://stake.com/sports/soccer/usa/mls",
+    "soccer_japan_j_league":                 "https://stake.com/sports/soccer/japan/j1-league",
+    "soccer_south_korea_kleague1":           "https://stake.com/sports/soccer/south-korea/k-league-1",
 }
+
+# Emoji olahraga per kategori (dipakai di pesan Telegram)
+_SPORT_EMOJI: dict = {
+    "soccer":             "⚽",
+    "baseball":           "⚾",
+    "baseball_kbo":       "⚾",
+    "baseball_npb":       "⚾",
+    "basketball":         "🏀",
+    "american-football":  "🏈",   # slug dipakai di bot_main SPORTS_TO_SCAN
+    "americanfootball":   "🏈",   # prefix dari OddsAPI sport keys (tanpa tanda hubung)
+    "cricket":            "🏏",
+}
+
+def _sport_emoji(sport_key: str) -> str:
+    """Kembalikan emoji yang tepat untuk cabang olahraga."""
+    # Cek exact match dulu, lalu prefix match
+    if sport_key in _SPORT_EMOJI:
+        return _SPORT_EMOJI[sport_key]
+    for prefix, emoji in _SPORT_EMOJI.items():
+        if sport_key.startswith(prefix):
+            return emoji
+    return "🏟️"
 
 _OUTCOME_LABEL = {"Home": "🏠 Home (Tim Kandang)", "Away": "✈️ Away (Tim Tandang)", "Draw": "🤝 Seri"}
 _OUTCOME_EMOJI = {"Home": "🟢", "Away": "🔵", "Draw": "🟡"}
@@ -70,11 +115,12 @@ def _format_signal_message(
 
     tag = "🔥 VALUE BET" if opp_type == "value_bet" else "⚡ ARBITRAGE"
     kelly_str = f"Rp{kelly_stake:,.0f}"
+    s_emoji = _sport_emoji(sport_key)
 
     lines = [
         f"{tag} TERDETEKSI!",
         "",
-        f"⚽ *{home_team}* vs *{away_team}*",
+        f"{s_emoji} *{home_team}* vs *{away_team}*",
         "",
         f"{emoji} *Prediksi: {label}*",
         f"💰 Odds terbaik pasar : `{odds:.2f}` _(ref: {platform})_",

@@ -72,24 +72,6 @@ TOURNAMENT_LIST_QUERY = """
 }
 """
 
-SPORT_LIST_QUERY = """
-{
-  sportList {
-    id
-    name
-    slug
-  }
-}
-"""
-
-ALL_SPORT_BETS_QUERY = """
-query AllSportBets($limit: Int) {
-  allSportBets(limit: $limit) {
-    id
-  }
-}
-"""
-
 # ---------------------------------------------------------------------------
 # Opsional: OddsAPI (the-odds-api.com) — gratis 500 req/bulan
 # Set ODDS_API_KEY di environment variable untuk mengaktifkan
