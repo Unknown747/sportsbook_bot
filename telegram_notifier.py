@@ -113,7 +113,9 @@ def _format_signal_message(
     ai_pct = ai_prob * 100
     implied_pct = (1 / odds) * 100
 
-    tag = "🔥 VALUE BET" if opp_type == "value_bet" else "⚡ ARBITRAGE"
+    tag = "💎 VALUE BET" if opp_type == "value_bet" else "⚡ ARBITRAGE"
+    if edge >= config.TELEGRAM_HOT_EDGE:
+        tag = f"🔥 HOT {tag}"
     kelly_str = f"Rp{kelly_stake:,.0f}"
     s_emoji = _sport_emoji(sport_key)
 

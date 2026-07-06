@@ -79,4 +79,7 @@ LOOP_INTERVAL_SECONDS: int = 600        # cek ulang setiap 10 menit
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID: str = os.environ.get("TELEGRAM_CHAT_ID", "")
 # Minimum edge sebelum alert Telegram dikirim (bisa beda dari MIN_VALUE_EDGE).
-TELEGRAM_MIN_EDGE: float = 0.05
+TELEGRAM_MIN_EDGE: float = 0.02
+# Ambang batas edge untuk label "🔥 HOT" di pesan Telegram — sinyal dengan
+# edge setinggi ini dianggap jauh lebih meyakinkan dibanding sinyal biasa.
+TELEGRAM_HOT_EDGE: float = 0.05
