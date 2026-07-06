@@ -145,24 +145,70 @@ validate_odds_api_key() {
     esac
 }
 
-prompt_env_key "ODDS_API_KEY" "API key data odds (wajib) — daftar gratis di https://the-odds-api.com" "required"
+# ── ODDS_API_KEY(S) — dukung 1 key atau rotasi banyak key ──────
+# Kalau ODDS_API_KEYS (jamak) sudah terisi di .env, pakai itu langsung.
+# Kalau belum, tanya user mau isi 1 key saja atau beberapa key untuk rotasi
+# otomatis (supaya kalau satu key kena quota habis, bot pindah ke key
+# berikutnya tanpa henti).
+EXISTING_MULTI=$(get_env_value "ODDS_API_KEYS")
 
-if command -v curl &>/dev/null; then
-    ODDS_KEY_VAL=$(get_env_value "ODDS_API_KEY")
-    if [ -n "$ODDS_KEY_VAL" ]; then
-        info "Memvalidasi ODDS_API_KEY ke the-odds-api.com..."
-        while ! validate_odds_api_key "$ODDS_KEY_VAL"; do
-            if [ ! -t 0 ]; then
-                fail "ODDS_API_KEY tidak valid dan tidak ada input interaktif untuk perbaikan."
+if [ -n "$EXISTING_MULTI" ]; then
+    NUM_KEYS=$(echo "$EXISTING_MULTI" | tr ',' '\n' | grep -c '.')
+    ok "ODDS_API_KEYS sudah terisi (${NUM_KEYS} key untuk rotasi)."
+elif [ -t 0 ]; then
+    echo ""
+    info "API key data odds (wajib) — daftar gratis di https://the-odds-api.com"
+    read -rp "  Mau pakai rotasi multi-key? (disarankan kalau punya lebih dari 1 akun/key) [y/N] " USE_MULTI
+
+    ODDS_KEYS_ARR=()
+    if [[ "$USE_MULTI" =~ ^[Yy]$ ]]; then
+        echo "  Masukkan key satu per satu. Ketik kosong (Enter) kalau sudah selesai."
+        while true; do
+            read -rp "  Key #$((${#ODDS_KEYS_ARR[@]} + 1)) (kosongkan untuk selesai): " ONE_KEY
+            ONE_KEY=$(echo "$ONE_KEY" | tr -d '[:space:]')
+            if [ -z "$ONE_KEY" ]; then
+                if [ ${#ODDS_KEYS_ARR[@]} -eq 0 ]; then
+                    warn "Minimal 1 key wajib diisi."
+                    continue
+                fi
+                break
             fi
-            read -rp "  Masukkan ulang ODDS_API_KEY yang benar: " ODDS_KEY_VAL
-            ODDS_KEY_VAL=$(echo "$ODDS_KEY_VAL" | tr -d '[:space:]')
-            [ -z "$ODDS_KEY_VAL" ] && fail "ODDS_API_KEY wajib diisi."
-            set_env_value "ODDS_API_KEY" "$ODDS_KEY_VAL"
+            if command -v curl &>/dev/null; then
+                if validate_odds_api_key "$ONE_KEY"; then
+                    ODDS_KEYS_ARR+=("$ONE_KEY")
+                else
+                    warn "Key ini ditolak — tidak ditambahkan ke daftar rotasi. Coba key lain atau Enter untuk selesai."
+                fi
+            else
+                ODDS_KEYS_ARR+=("$ONE_KEY")
+            fi
         done
+        JOINED=$(IFS=,; echo "${ODDS_KEYS_ARR[*]}")
+        set_env_value "ODDS_API_KEYS" "$JOINED"
+        set_env_value "ODDS_API_KEY" "${ODDS_KEYS_ARR[0]}"
+        ok "${#ODDS_KEYS_ARR[@]} key disimpan ke ODDS_API_KEYS (rotasi aktif)."
+    else
+        prompt_env_key "ODDS_API_KEY" "API key data odds (wajib) — daftar gratis di https://the-odds-api.com" "required"
+        if command -v curl &>/dev/null; then
+            ODDS_KEY_VAL=$(get_env_value "ODDS_API_KEY")
+            if [ -n "$ODDS_KEY_VAL" ]; then
+                info "Memvalidasi ODDS_API_KEY ke the-odds-api.com..."
+                while ! validate_odds_api_key "$ODDS_KEY_VAL"; do
+                    if [ ! -t 0 ]; then
+                        fail "ODDS_API_KEY tidak valid dan tidak ada input interaktif untuk perbaikan."
+                    fi
+                    read -rp "  Masukkan ulang ODDS_API_KEY yang benar: " ODDS_KEY_VAL
+                    ODDS_KEY_VAL=$(echo "$ODDS_KEY_VAL" | tr -d '[:space:]')
+                    [ -z "$ODDS_KEY_VAL" ] && fail "ODDS_API_KEY wajib diisi."
+                    set_env_value "ODDS_API_KEY" "$ODDS_KEY_VAL"
+                done
+            fi
+        else
+            warn "curl tidak ditemukan — validasi langsung ODDS_API_KEY dilewati."
+        fi
     fi
 else
-    warn "curl tidak ditemukan — validasi langsung ODDS_API_KEY dilewati."
+    fail "ODDS_API_KEY/ODDS_API_KEYS belum diisi di .env dan tidak ada input interaktif tersedia."
 fi
 
 prompt_env_key "TELEGRAM_BOT_TOKEN" "Token bot Telegram (opsional, untuk alert) — dari @BotFather" "optional"
@@ -208,7 +254,10 @@ except ImportError:
 load_dotenv(dotenv_path=dotenv_path, override=True)
 
 missing = []
-for k in ["ODDS_API_KEY", "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
+if not os.environ.get("ODDS_API_KEY", "").strip() and not os.environ.get("ODDS_API_KEYS", "").strip():
+    missing.append("ODDS_API_KEY/ODDS_API_KEYS")
+
+for k in ["TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID"]:
     if not os.environ.get(k, "").strip():
         missing.append(k)
 
