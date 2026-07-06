@@ -71,10 +71,23 @@ def get_market_consensus_prediction(match_data: dict) -> Optional[Dict[str, floa
                 sums[outcome] += implied
                 counts[outcome] += 1
 
-    if any(counts[o] == 0 for o in outcomes):
+    # Drop outcomes where no bookmaker reported valid odds (e.g. a single
+    # bad Draw entry). Home and Away must both be present to proceed.
+    avg_implied = {
+        o: sums[o] / counts[o]
+        for o in outcomes
+        if counts[o] > 0
+    }
+
+    if not avg_implied.get("Home") or not avg_implied.get("Away"):
         return None
 
-    avg_implied = {o: sums[o] / counts[o] for o in outcomes}
+    # For 3-way markets (soccer), Draw must also be present — otherwise
+    # normalizing Home+Away to 1.0 inflates both and creates false value signals.
+    is_3way: bool = bool(match_data.get("is_3way", False))
+    if is_3way and "Draw" not in avg_implied:
+        return None
+
     total = sum(avg_implied.values())
 
     if total <= 0.0:

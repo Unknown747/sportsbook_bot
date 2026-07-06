@@ -255,7 +255,11 @@ class StakeFetcher:
                 timeout=15,
             )
             resp.raise_for_status()
-            sports = resp.json()
+            try:
+                sports = resp.json()
+            except ValueError as exc:
+                logger.error("OddsAPI: respons daftar liga bukan JSON valid: %s", exc)
+                return self._active_sports_cache or []
             self._active_sports_cache = sports
             self._active_sports_fetched_at = now
             return sports
@@ -349,36 +353,48 @@ class StakeFetcher:
         if not config.ODDS_API_KEY:
             return []
 
-        try:
-            resp = self.odds_session.get(
-                f"{ODDS_API_BASE}/sports/{sport_key}/odds",
-                params={
-                    "apiKey": config.ODDS_API_KEY,
-                    "regions": "eu,us,au,uk",
-                    "markets": "h2h",
-                    "oddsFormat": "decimal",
-                },
-                timeout=15,
-            )
+        for attempt in range(2):  # 1 retry untuk transient network error
+            try:
+                resp = self.odds_session.get(
+                    f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                    params={
+                        "apiKey": config.ODDS_API_KEY,
+                        "regions": "eu,us,au,uk",
+                        "markets": "h2h",
+                        "oddsFormat": "decimal",
+                    },
+                    timeout=15,
+                )
 
-            remaining = resp.headers.get("x-requests-remaining", "?")
-            logger.info("OddsAPI remaining requests: %s", remaining)
+                remaining = resp.headers.get("x-requests-remaining", "?")
+                logger.info("OddsAPI remaining requests: %s", remaining)
 
-            if resp.status_code == 401:
-                logger.error("OddsAPI: API key tidak valid.")
-                return []
-            if resp.status_code == 422:
-                logger.warning("OddsAPI: sport '%s' tidak tersedia.", sport_key)
-                return []
-            if resp.status_code == 429:
-                logger.warning("OddsAPI: rate limit tercapai (HTTP 429) — coba lagi nanti.")
-                return []
+                if resp.status_code == 401:
+                    logger.error("OddsAPI: API key tidak valid.")
+                    return []
+                if resp.status_code == 422:
+                    logger.warning("OddsAPI: sport '%s' tidak tersedia.", sport_key)
+                    return []
+                if resp.status_code == 429:
+                    logger.warning("OddsAPI: rate limit tercapai (HTTP 429) — coba lagi nanti.")
+                    return []
 
-            resp.raise_for_status()
-            events = resp.json()
+                resp.raise_for_status()
+                try:
+                    events = resp.json()
+                except ValueError as exc:
+                    logger.error("OddsAPI: respons bukan JSON valid: %s", exc)
+                    return []
+                break  # sukses — keluar dari loop retry
 
-        except requests.exceptions.RequestException as exc:
-            logger.error("OddsAPI request error: %s", exc)
+            except requests.exceptions.RequestException as exc:
+                if attempt == 0:
+                    logger.warning("OddsAPI request error (retry 1): %s", exc)
+                    time.sleep(2)
+                else:
+                    logger.error("OddsAPI request error (final): %s", exc)
+                    return []
+        else:
             return []
 
         matches = []
@@ -398,7 +414,10 @@ class StakeFetcher:
                     bookie_outcomes: dict = {}
                     for outcome in market.get("outcomes") or []:
                         name = outcome.get("name", "")
-                        price = float(outcome.get("price", 0))
+                        try:
+                            price = float(outcome.get("price") or 0)
+                        except (TypeError, ValueError):
+                            continue
                         if price <= 1.0:
                             continue
                         if name == home_name:

@@ -119,8 +119,8 @@ def _process_update(update: dict) -> None:
 
     data = callback.get("data", "")
     callback_id = callback.get("id")
-    message = callback.get("message", {})
-    chat_id = message.get("chat", {}).get("id")
+    message = callback.get("message") or {}
+    chat_id = (message.get("chat") or {}).get("id")
     message_id = message.get("message_id")
     original_text = message.get("text", "")
 
