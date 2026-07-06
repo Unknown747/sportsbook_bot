@@ -29,8 +29,22 @@ STAKE_API_URL: str = "https://stake.com/_api/graphql"
 STAKE_API_KEY: str = os.environ.get("STAKE_API_KEY", "")
 STAKE_CURRENCY: str = "idr"
 
-# ── OddsAPI (sumber data odds riil — wajib untuk mode live) ────────────────────
-ODDS_API_KEY: str = os.environ.get("ODDS_API_KEY", "")
+# ── OddsAPI — multi-key rotation ──────────────────────────────────────────────
+# Untuk rotasi otomatis: set ODDS_API_KEYS ke beberapa key dipisah koma.
+#   Contoh: ODDS_API_KEYS=keyABC123,keyDEF456,keyGHI789
+# Kalau ODDS_API_KEYS tidak diset, fallback ke ODDS_API_KEY tunggal.
+# Bot otomatis pindah key saat kena 429 atau sisa quota ≤ LOW_QUOTA_THRESHOLD.
+_raw_keys: str = os.environ.get("ODDS_API_KEYS", "")
+ODDS_API_KEYS: list = [k.strip() for k in _raw_keys.split(",") if k.strip()]
+if not ODDS_API_KEYS:
+    _single = os.environ.get("ODDS_API_KEY", "")
+    if _single:
+        ODDS_API_KEYS = [_single]
+# Backward compat — selalu menunjuk ke key pertama yang aktif.
+ODDS_API_KEY: str = ODDS_API_KEYS[0] if ODDS_API_KEYS else ""
+
+# Otomatis pindah key saat sisa quota mencapai batas ini (sebelum benar-benar habis).
+ODDS_API_LOW_QUOTA_THRESHOLD: int = 15
 
 # ── Mode ──────────────────────────────────────────────────────────────────────
 # Catatan penting: Stake.com TIDAK menyediakan market/odds ID sportsbook riil

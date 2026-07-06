@@ -111,6 +111,103 @@ SPORT_FIXED_KEY: dict = {
 _ACTIVE_SPORTS_TTL_SECONDS = 3600
 
 
+class _OddsApiKeyRotator:
+    """
+    Rotasi otomatis di antara beberapa OddsAPI key.
+
+    Strategi:
+    - Pindah key segera saat kena 429 (rate limit) atau 401 (key tidak valid).
+    - Pindah key secara preventif saat sisa quota ≤ LOW_QUOTA_THRESHOLD
+      (supaya tidak sampai benar-benar 0 di tengah siklus scan).
+    - Kalau semua key sudah exhausted, kembalikan None — caller wajib skip.
+    - Status semua key di-log tiap siklus agar user bisa pantau kapan perlu
+      tambah/rotate key secara manual.
+    """
+
+    def __init__(self, keys: list) -> None:
+        self._keys: list = [k for k in keys if k]
+        self._index: int = 0                       # key aktif saat ini
+        self._exhausted: set = set()               # indeks key yang sudah habis/tidak valid
+        self._remaining: dict = {}                 # indeks → sisa request (dari header API)
+
+    # ── Public interface ──────────────────────────────────────────────
+
+    @property
+    def active_key(self) -> Optional[str]:
+        """Key aktif saat ini, atau None jika semua exhausted."""
+        if not self._keys:
+            return None
+        # Cari key yang belum exhausted mulai dari _index saat ini
+        for offset in range(len(self._keys)):
+            idx = (self._index + offset) % len(self._keys)
+            if idx not in self._exhausted:
+                self._index = idx
+                return self._keys[idx]
+        return None
+
+    def update_remaining(self, remaining: int) -> None:
+        """
+        Catat sisa quota dari header `x-requests-remaining`.
+        Kalau sisa ≤ threshold, pindah ke key berikutnya secara preventif.
+        """
+        self._remaining[self._index] = remaining
+        if remaining <= config.ODDS_API_LOW_QUOTA_THRESHOLD:
+            logger.warning(
+                "OddsAPI key slot #%d: sisa quota %d (≤ threshold %d) — "
+                "rotasi preventif ke key berikutnya.",
+                self._index + 1, remaining, config.ODDS_API_LOW_QUOTA_THRESHOLD,
+            )
+            self._rotate()
+
+    def mark_exhausted(self, reason: str = "rate_limit") -> None:
+        """Tandai key aktif sebagai exhausted dan pindah ke key berikutnya."""
+        logger.warning(
+            "OddsAPI key slot #%d ditandai exhausted (%s) — rotasi.",
+            self._index + 1, reason,
+        )
+        self._exhausted.add(self._index)
+        self._rotate()
+
+    def has_keys(self) -> bool:
+        return bool(self._keys)
+
+    def n_available(self) -> int:
+        """Jumlah key yang belum exhausted."""
+        return len(self._keys) - len(self._exhausted)
+
+    def log_status(self) -> None:
+        """Tulis status semua key ke log (nilai key disamarkan)."""
+        parts = []
+        for i, key in enumerate(self._keys):
+            masked = f"{key[:4]}…{key[-4:]}" if len(key) >= 8 else "****"
+            rem = self._remaining.get(i, "?")
+            if i in self._exhausted:
+                state = "❌ exhausted"
+            elif i == self._index:
+                state = "✅ aktif"
+            else:
+                state = "⏳ standby"
+            parts.append(f"slot#{i+1}({masked}) {state} sisa={rem}")
+        logger.info("OddsAPI key status: %s", " | ".join(parts))
+
+    # ── Private ───────────────────────────────────────────────────────
+
+    def _rotate(self) -> None:
+        """Advance ke key berikutnya yang belum exhausted."""
+        start = self._index
+        for _ in range(len(self._keys)):
+            self._index = (self._index + 1) % len(self._keys)
+            if self._index not in self._exhausted:
+                logger.info("OddsAPI: beralih ke key slot #%d.", self._index + 1)
+                return
+        # Semua key exhausted — biarkan _index di posisi terakhir, active_key akan None
+        logger.error(
+            "OddsAPI: semua %d key slot exhausted — tidak ada key aktif. "
+            "Tambah key baru di ODDS_API_KEYS atau tunggu reset quota bulan depan.",
+            len(self._keys),
+        )
+
+
 class StakeFetcher:
     """
     Fetches REAL sports match data for the betting bot.
@@ -134,6 +231,11 @@ class StakeFetcher:
         self.odds_session = requests.Session()
         self._active_sports_cache: Optional[list] = None
         self._active_sports_fetched_at: float = 0.0
+        self._key_rotator = _OddsApiKeyRotator(config.ODDS_API_KEYS)
+        if self._key_rotator.has_keys():
+            logger.info(
+                "OddsAPI key rotator: %d key dimuat.", len(config.ODDS_API_KEYS)
+            )
 
     # ------------------------------------------------------------------
     # Stake API utility methods
@@ -227,15 +329,22 @@ class StakeFetcher:
         ):
             return self._active_sports_cache
 
-        if not config.ODDS_API_KEY:
+        api_key = self._key_rotator.active_key
+        if not api_key:
             return []
 
         try:
             resp = self.odds_session.get(
                 f"{ODDS_API_BASE}/sports",
-                params={"apiKey": config.ODDS_API_KEY},
+                params={"apiKey": api_key},
                 timeout=15,
             )
+            if resp.status_code == 429:
+                self._key_rotator.mark_exhausted("429 pada /sports")
+                return self._active_sports_cache or []
+            if resp.status_code == 401:
+                self._key_rotator.mark_exhausted("401 key tidak valid")
+                return self._active_sports_cache or []
             resp.raise_for_status()
             try:
                 sports = resp.json()
@@ -325,59 +434,123 @@ class StakeFetcher:
         """
         Fetch live/upcoming match odds from the-odds-api.com.
 
+        Mendukung rotasi multi-key: otomatis pindah ke key berikutnya saat
+        kena 429 / 401 / quota menipis, sampai semua key habis.
+
         Args:
             sport_key: OddsAPI sport key e.g. 'soccer_epl', 'basketball_nba'.
             limit: Max number of events to return.
 
         Returns:
-            List of match dicts in bot format, or [] on failure.
+            List of match dicts in bot format, atau [] jika semua key gagal.
         """
-        if not config.ODDS_API_KEY:
+        if not self._key_rotator.has_keys():
             return []
 
-        for attempt in range(2):  # 1 retry untuk transient network error
-            try:
-                resp = self.odds_session.get(
-                    f"{ODDS_API_BASE}/sports/{sport_key}/odds",
-                    params={
-                        "apiKey": config.ODDS_API_KEY,
-                        "regions": "eu,us,au,uk",
-                        "markets": "h2h",
-                        "oddsFormat": "decimal",
-                    },
-                    timeout=15,
-                )
+        # Coba tiap key yang tersedia (rotasi otomatis saat 429/401/quota rendah).
+        # _SUCCESS / _ROTATE / _ABORT adalah sentinel untuk kontrol alur outer loop.
+        _SUCCESS, _ROTATE, _ABORT = "ok", "rotate", "abort"
+        events: list = []
 
-                remaining = resp.headers.get("x-requests-remaining", "?")
-                logger.info("OddsAPI remaining requests: %s", remaining)
+        for _key_attempt in range(len(config.ODDS_API_KEYS)):
+            api_key = self._key_rotator.active_key
+            if not api_key:
+                logger.error("OddsAPI: semua key exhausted — skip '%s'.", sport_key)
+                return []
+
+            outcome = _ABORT  # default jika semua percobaan gagal
+
+            # Network retry dalam satu key (untuk transient error, bukan 4xx)
+            for net_attempt in range(2):
+                try:
+                    resp = self.odds_session.get(
+                        f"{ODDS_API_BASE}/sports/{sport_key}/odds",
+                        params={
+                            "apiKey": api_key,
+                            "regions": "eu,us,au,uk",
+                            "markets": "h2h",
+                            "oddsFormat": "decimal",
+                        },
+                        timeout=15,
+                    )
+                except requests.exceptions.RequestException as exc:
+                    if net_attempt == 0:
+                        logger.warning(
+                            "OddsAPI request error slot#%d (retry): %s",
+                            self._key_rotator._index + 1, exc,
+                        )
+                        time.sleep(2)
+                        continue
+                    logger.error(
+                        "OddsAPI request error slot#%d (final): %s",
+                        self._key_rotator._index + 1, exc,
+                    )
+                    outcome = _ABORT
+                    break
+
+                # Simpan slot index SEBELUM apapun yang bisa merotasi index.
+                # update_remaining() bisa memanggil _rotate() secara internal
+                # (preemptive rotate saat quota rendah), sehingga _index berubah.
+                # Kita harus tahu slot mana yang menghasilkan respons ini.
+                responding_slot = self._key_rotator._index
+
+                # ── Tangani status error dulu, SEBELUM update_remaining ──
+                # Urutan ini penting: mark_exhausted harus mengacu ke slot yang
+                # benar-benar kena 429/401, bukan slot setelah rotasi.
+                if resp.status_code == 429:
+                    logger.warning(
+                        "OddsAPI slot#%d kena rate limit (429) untuk '%s'.",
+                        responding_slot + 1, sport_key,
+                    )
+                    self._key_rotator.mark_exhausted("429 rate limit")
+                    outcome = _ROTATE
+                    break
 
                 if resp.status_code == 401:
-                    logger.error("OddsAPI: API key tidak valid.")
-                    return []
+                    logger.error(
+                        "OddsAPI slot#%d key tidak valid (401).",
+                        responding_slot + 1,
+                    )
+                    self._key_rotator.mark_exhausted("401 key invalid")
+                    outcome = _ROTATE
+                    break
+
+                # ── Request berhasil — catat sisa quota (boleh rotasi preventif) ──
+                remaining_str = resp.headers.get("x-requests-remaining", "")
+                try:
+                    self._key_rotator.update_remaining(int(remaining_str))
+                except (ValueError, TypeError):
+                    pass
+                logger.info(
+                    "OddsAPI slot#%d remaining: %s",
+                    responding_slot + 1,
+                    remaining_str or "?",
+                )
+
                 if resp.status_code == 422:
                     logger.warning("OddsAPI: sport '%s' tidak tersedia.", sport_key)
-                    return []
-                if resp.status_code == 429:
-                    logger.warning("OddsAPI: rate limit tercapai (HTTP 429) — coba lagi nanti.")
+                    return []  # masalah sport key, bukan masalah API key
+
+                try:
+                    resp.raise_for_status()
+                except requests.exceptions.HTTPError as exc:
+                    logger.error("OddsAPI HTTP error: %s", exc)
                     return []
 
-                resp.raise_for_status()
                 try:
                     events = resp.json()
                 except ValueError as exc:
                     logger.error("OddsAPI: respons bukan JSON valid: %s", exc)
                     return []
-                break  # sukses — keluar dari loop retry
 
-            except requests.exceptions.RequestException as exc:
-                if attempt == 0:
-                    logger.warning("OddsAPI request error (retry 1): %s", exc)
-                    time.sleep(2)
-                else:
-                    logger.error("OddsAPI request error (final): %s", exc)
-                    return []
-        else:
-            return []
+                outcome = _SUCCESS
+                break  # request berhasil, keluar dari net retry
+
+            if outcome == _SUCCESS:
+                break          # punya data → lanjut parse
+            if outcome == _ABORT:
+                return []      # network error — tidak ada gunanya coba key lain
+            # outcome == _ROTATE → lanjut outer loop dengan key berikutnya
 
         matches = []
         for event in events[:limit]:
@@ -480,12 +653,14 @@ class StakeFetcher:
         Returns:
             List of match dicts (semua liga digabung), atau [] jika tidak ada data.
         """
-        if not config.ODDS_API_KEY:
+        if not self._key_rotator.has_keys():
             logger.debug(
-                "ODDS_API_KEY tidak diset — OddsAPI dinonaktifkan. "
-                "Set env var ODDS_API_KEY untuk data odds live."
+                "ODDS_API_KEY / ODDS_API_KEYS tidak diset — OddsAPI dinonaktifkan. "
+                "Set secret ODDS_API_KEY (atau ODDS_API_KEYS untuk multi-key) "
+                "untuk data odds live."
             )
             return []
+        self._key_rotator.log_status()
 
         sport_keys = self._resolve_sport_keys(sport)
         if not sport_keys:
