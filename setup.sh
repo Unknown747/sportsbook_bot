@@ -114,7 +114,57 @@ prompt_env_key() {
     ok "${KEY} disimpan ke .env (${#VAL} karakter)"
 }
 
+# Validasi ODDS_API_KEY langsung ke the-odds-api.com (pakai endpoint /v4/sports
+# yang tidak makan quota request) — supaya user langsung tahu kalau key salah
+# atau expired, tidak perlu jalankan bot dulu baru ketahuan.
+validate_odds_api_key() {
+    local KEY="$1"
+    local HTTP_CODE
+    HTTP_CODE=$(curl -s -o /tmp/odds_api_check.$$ -w "%{http_code}" \
+        "https://api.the-odds-api.com/v4/sports/?apiKey=${KEY}" --max-time 10 2>/dev/null)
+    local BODY
+    BODY=$(cat /tmp/odds_api_check.$$ 2>/dev/null)
+    rm -f /tmp/odds_api_check.$$
+
+    case "$HTTP_CODE" in
+        200)
+            ok "ODDS_API_KEY valid — koneksi ke the-odds-api.com berhasil."
+            return 0 ;;
+        401)
+            warn "ODDS_API_KEY ditolak (401 Unauthorized) — key salah atau belum aktif."
+            return 1 ;;
+        429)
+            warn "ODDS_API_KEY kena rate limit / quota habis (429) — key mungkin masih valid tapi quota bulanan habis."
+            return 0 ;;
+        "")
+            warn "Tidak bisa cek ODDS_API_KEY — tidak ada koneksi internet atau curl tidak tersedia. Dilewati."
+            return 0 ;;
+        *)
+            warn "Cek ODDS_API_KEY dapat status HTTP ${HTTP_CODE} yang tidak terduga. Dilewati."
+            return 0 ;;
+    esac
+}
+
 prompt_env_key "ODDS_API_KEY" "API key data odds (wajib) — daftar gratis di https://the-odds-api.com" "required"
+
+if command -v curl &>/dev/null; then
+    ODDS_KEY_VAL=$(get_env_value "ODDS_API_KEY")
+    if [ -n "$ODDS_KEY_VAL" ]; then
+        info "Memvalidasi ODDS_API_KEY ke the-odds-api.com..."
+        while ! validate_odds_api_key "$ODDS_KEY_VAL"; do
+            if [ ! -t 0 ]; then
+                fail "ODDS_API_KEY tidak valid dan tidak ada input interaktif untuk perbaikan."
+            fi
+            read -rp "  Masukkan ulang ODDS_API_KEY yang benar: " ODDS_KEY_VAL
+            ODDS_KEY_VAL=$(echo "$ODDS_KEY_VAL" | tr -d '[:space:]')
+            [ -z "$ODDS_KEY_VAL" ] && fail "ODDS_API_KEY wajib diisi."
+            set_env_value "ODDS_API_KEY" "$ODDS_KEY_VAL"
+        done
+    fi
+else
+    warn "curl tidak ditemukan — validasi langsung ODDS_API_KEY dilewati."
+fi
+
 prompt_env_key "TELEGRAM_BOT_TOKEN" "Token bot Telegram (opsional, untuk alert) — dari @BotFather" "optional"
 prompt_env_key "TELEGRAM_CHAT_ID" "Chat ID Telegram (opsional, untuk alert) — dari @userinfobot" "optional"
 
