@@ -80,7 +80,12 @@ TOURNAMENT_LIST_QUERY = """
 ODDS_API_BASE: str = "https://api.the-odds-api.com/v4"
 
 SPORT_TO_ODDSAPI: dict = {
-    "soccer": "soccer_epl",
+    # Fallback jika resolver dinamis gagal (key exhausted / timeout).
+    # Dipilih liga yang AKTIF SEPANJANG TAHUN atau musim paling panjang:
+    #   - MLS aktif Mar-Nov (lebih panjang dari EPL Aug-May)
+    #   - Brazil Série A aktif Apr-Nov
+    # EPL (soccer_epl) dipakai saat musim aktif (Aug-May) lewat resolver dinamis.
+    "soccer": "soccer_usa_mls",
     "basketball": "basketball_wnba",
     "baseball": "baseball_mlb",
     "american-football": "americanfootball_nfl_preseason",
@@ -364,7 +369,8 @@ class StakeFetcher:
     MULTI_LEAGUE_SPORTS: set = {"soccer"}
 
     # Maksimal liga soccer yang di-fetch per siklus (hemat kuota OddsAPI).
-    MAX_SOCCER_LEAGUES: int = 8
+    # 4 liga sudah cukup untuk menemukan value bet tanpa boros 500 req/bln.
+    MAX_SOCCER_LEAGUES: int = 4
 
     # Kata kunci di sport key yang menandakan futures/outrights market
     # (bukan pertandingan nyata) — dilewati supaya tidak buang request.
