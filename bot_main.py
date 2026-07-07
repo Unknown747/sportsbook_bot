@@ -52,7 +52,22 @@ SPORTS_TO_SCAN: List[str] = [
 
 # ── Data fetching ─────────────────────────────────────────────────────────────
 
-def _fetch_all_matches(fetcher: StakeFetcher) -> list:
+def _sport_category(sport_key: str) -> str:
+    """Petakan OddsAPI sport key spesifik ke kategori umum di SPORTS_TO_SCAN."""
+    if sport_key.startswith("soccer"):
+        return "soccer"
+    if sport_key.startswith("basketball"):
+        return "basketball"
+    if sport_key.startswith("americanfootball"):
+        return "american-football"
+    if sport_key.startswith("cricket"):
+        return "cricket"
+    if sport_key.startswith("baseball"):
+        return "baseball"
+    return sport_key
+
+
+def _fetch_all_matches(fetcher: StakeFetcher) -> tuple:
     """
     Ambil pertandingan live/upcoming dari semua cabang olahraga.
 
@@ -60,24 +75,34 @@ def _fetch_all_matches(fetcher: StakeFetcher) -> list:
     (misal kuota habis atau tidak ada pertandingan aktif), siklus akan
     dilewati sepenuhnya. Bot live tidak boleh mengirim sinyal berdasarkan
     data palsu.
+
+    Returns:
+        (all_matches, sport_counts) — sport_counts = {sport_slug: jumlah_match}
     """
     all_matches: list = []
+    sport_counts: dict = {}
     for sport in SPORTS_TO_SCAN:
         try:
             matches = fetcher.fetch_live_matches(sport=sport, limit=20)
+            sport_counts[sport] = len(matches)
+            if matches:
+                logger.info("  ✅ %s: %d pertandingan ditemukan.", sport, len(matches))
+            else:
+                logger.info("  ⬜ %s: 0 pertandingan (tidak ada data / off-season).", sport)
             all_matches.extend(matches)
         except Exception as exc:
             logger.error("Error fetching '%s' matches: %s", sport, exc)
+            sport_counts[sport] = 0
 
     if not all_matches:
         logger.warning(
             "Tidak ada data live/riil dari OddsAPI untuk sport manapun — "
             "siklus dilewati (tidak ada sinyal palsu yang dikirim)."
         )
-        return []
+        return [], sport_counts
 
     logger.info("Total %d pertandingan live/upcoming dari semua sport.", len(all_matches))
-    return all_matches
+    return all_matches, sport_counts
 
 
 # ── Scheduler helper ──────────────────────────────────────────────────────────
@@ -164,15 +189,21 @@ def run_betting_cycle(
     daily_loss = get_today_confirmed_stake_total(today)
     logger.info("Total stake terkonfirmasi hari ini: Rp%.0f", daily_loss)
 
-    matches = _fetch_all_matches(fetcher)
+    matches, sport_counts = _fetch_all_matches(fetcher)
     logger.info("Memproses %d pertandingan.", len(matches))
 
     signals_sent: int = 0
+    # Per-sport: jumlah sinyal yang berhasil dikirim
+    sport_signals: dict = {s: 0 for s in SPORTS_TO_SCAN}
+    # Per-sport: alasan match dilewati (untuk diagnostik di log & Telegram)
+    sport_skipped_no_consensus: dict = {s: 0 for s in SPORTS_TO_SCAN}
+    sport_skipped_no_value: dict = {s: 0 for s in SPORTS_TO_SCAN}
 
     for match in matches:
         match_id = match["match_id"]
         label = f"{match.get('home_team', '?')} vs {match.get('away_team', '?')}"
         sport_key: str = match.get("sport", "unknown")
+        sport_cat: str = _sport_category(sport_key)
 
         try:
             fair_probs = get_market_consensus_prediction(match)
@@ -182,6 +213,7 @@ def run_betting_cycle(
                     "[%s] %s | Data odds riil tidak cukup (<2 bookmaker) — dilewati.",
                     match_id, label,
                 )
+                sport_skipped_no_consensus[sport_cat] = sport_skipped_no_consensus.get(sport_cat, 0) + 1
                 continue
 
             is_3way: bool = match.get("is_3way", False)
@@ -204,7 +236,18 @@ def run_betting_cycle(
             )
 
             if not opportunities:
-                logger.info("[%s] Tidak ada value bet untuk match ini.", match_id)
+                # Log edge terbesar yang tersedia meski di bawah threshold (diagnostik)
+                best_edges = []
+                for outcome_k, o_odds in match["best_odds"].items():
+                    fp = fair_probs.get(outcome_k)
+                    if fp and o_odds > 1.0:
+                        best_edges.append(fp - (1.0 / o_odds))
+                max_edge = max(best_edges) if best_edges else 0.0
+                logger.info(
+                    "[%s] %s | Tidak ada value bet (edge terbaik=%.2f%% < threshold %.0f%%).",
+                    match_id, label, max_edge * 100, config.MIN_VALUE_EDGE * 100,
+                )
+                sport_skipped_no_value[sport_cat] = sport_skipped_no_value.get(sport_cat, 0) + 1
                 continue
 
             for opp in opportunities:
@@ -252,16 +295,20 @@ def run_betting_cycle(
                     )
                     if sent:
                         signals_sent += 1
+                        sport_signals[sport_cat] = sport_signals.get(sport_cat, 0) + 1
 
         except Exception as exc:
             logger.error("[%s] Error: %s", match_id, exc, exc_info=True)
 
-    # Kirim ringkasan harian ke Telegram (selalu — supaya user tahu scan sudah berjalan
-    # walau tidak ada value bet yang ditemukan).
+    # Kirim ringkasan siklus ke Telegram — breakdown per sport supaya user
+    # tahu persis kenapa soccer (atau sport lain) tidak menghasilkan sinyal.
     send_daily_summary(
         total_signals=signals_sent,
         total_matches=len(matches),
-        sports_scanned=SPORTS_TO_SCAN,
+        sport_counts=sport_counts,
+        sport_signals=sport_signals,
+        sport_skipped_no_consensus=sport_skipped_no_consensus,
+        sport_skipped_no_value=sport_skipped_no_value,
         bankroll=current_bankroll,
     )
 

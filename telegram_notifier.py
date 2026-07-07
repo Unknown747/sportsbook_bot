@@ -319,14 +319,29 @@ def send_value_bet_alert(
         return False
 
 
+_SPORT_DISPLAY: dict = {
+    "soccer":            "⚽ Soccer",
+    "baseball":          "⚾ Baseball",
+    "baseball_kbo":      "⚾ KBO",
+    "baseball_npb":      "⚾ NPB",
+    "basketball":        "🏀 Basketball",
+    "american-football": "🏈 Am. Football",
+    "cricket":           "🏏 Cricket",
+}
+
+
 def send_daily_summary(
     total_signals: int,
     total_matches: int,
-    sports_scanned: list,
+    sport_counts: dict,
+    sport_signals: dict,
+    sport_skipped_no_consensus: dict,
+    sport_skipped_no_value: dict,
     bankroll: float,
 ) -> bool:
     """
-    Kirim ringkasan harian ke Telegram (dipanggil di awal siklus).
+    Kirim ringkasan siklus scan ke Telegram dengan breakdown per-sport —
+    supaya user tahu persis kenapa suatu sport tidak menghasilkan sinyal.
 
     Returns:
         True jika berhasil.
@@ -334,21 +349,42 @@ def send_daily_summary(
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         return False
 
-    sports_str = ", ".join(s.replace("baseball_", "").upper() for s in sports_scanned)
+    now_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%H:%M WIB")
 
     lines = [
         "🤖 *Sportsbook Bot — Laporan Scan*",
+        f"🕐 Waktu: {now_wib}  |  Mode: 🔴 LIVE",
         "",
-        "📅 Mode: 🔴 LIVE (data riil, konfirmasi taruhan MANUAL)",
-        f"🏟️ Olahraga: {sports_str}",
-        f"🔍 Total pertandingan dipindai: *{total_matches}*",
-        f"🎯 Sinyal value bet ditemukan: *{total_signals}*",
-        f"💼 Bankroll saat ini: *Rp{bankroll:,.0f}*",
+        f"🔍 *Total pertandingan dipindai: {total_matches}*",
+        f"🎯 *Sinyal value bet ditemukan: {total_signals}*",
+        f"💼 Bankroll: Rp{bankroll:,.0f}",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        "*Detail per olahraga:*",
     ]
+
+    for sport, count in sport_counts.items():
+        label = _SPORT_DISPLAY.get(sport, sport.upper())
+        sigs = sport_signals.get(sport, 0)
+        no_cons = sport_skipped_no_consensus.get(sport, 0)
+        no_val = sport_skipped_no_value.get(sport, 0)
+
+        if count == 0:
+            lines.append(f"  {label}: _0 pertandingan_ (off-season / no data)")
+        elif sigs > 0:
+            lines.append(f"  {label}: *{count} match → {sigs} SINYAL* ✅")
+        else:
+            reasons = []
+            if no_cons:
+                reasons.append(f"{no_cons} kurang bookmaker")
+            if no_val:
+                reasons.append(f"{no_val} edge < {config.MIN_VALUE_EDGE*100:.0f}%")
+            reason_str = ", ".join(reasons) if reasons else "diproses"
+            lines.append(f"  {label}: {count} match, 0 sinyal ({reason_str})")
 
     if total_signals == 0:
         lines.append("")
-        lines.append("_Tidak ada value bet hari ini. Bot akan scan lagi nanti._")
+        lines.append("_Tidak ada value bet siklus ini. Bot scan lagi nanti._")
 
     message = "\n".join(lines)
     url = TELEGRAM_API_BASE.format(token=config.TELEGRAM_BOT_TOKEN, method="sendMessage")
