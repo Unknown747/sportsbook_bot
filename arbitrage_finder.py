@@ -18,6 +18,13 @@ def _implicit_prob(odds: float) -> float:
     return 1.0 / odds
 
 
+# Odds maksimum yang dianggap valid untuk market utama (Pemenang/Moneyline).
+# Odds di atas ini hampir pasti bukan market H2H standar (mungkin futures,
+# specialty market, atau data rusak) — hampir tidak pernah tersedia di Stake
+# sehingga sinyal seperti ini tidak berguna dan membingungkan user.
+MAX_VALID_ODDS: float = 15.0
+
+
 def scan_opportunities(
     best_odds: Dict[str, float],
     fair_probs: Dict[str, float],
@@ -47,6 +54,11 @@ def scan_opportunities(
 
     for outcome, odds in best_odds.items():
         if odds <= 1.0:
+            continue
+
+        # Filter odds terlalu ekstrem — hampir pasti bukan market H2H utama
+        # (futures, specialty, atau data error) dan tidak bisa dipasang di Stake.
+        if odds > MAX_VALID_ODDS:
             continue
 
         fair_prob = fair_probs.get(outcome)

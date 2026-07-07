@@ -109,7 +109,6 @@ def _format_signal_message(
     stake_url = _build_stake_link(sport_key)
     edge_pct = edge * 100
     ai_pct = ai_prob * 100
-    implied_pct = (1 / odds) * 100
 
     tag = "💎 VALUE BET" if opp_type == "value_bet" else "⚡ ARBITRAGE"
     if edge >= config.TELEGRAM_HOT_EDGE:
@@ -121,18 +120,12 @@ def _format_signal_message(
     if outcome == "Home":
         bet_team = home_team
         bet_label = "🏠 KANDANG"
-        opp_team = away_team
-        opp_label = "✈️ TANDANG"
     elif outcome == "Away":
         bet_team = away_team
         bet_label = "✈️ TANDANG"
-        opp_team = home_team
-        opp_label = "🏠 KANDANG"
     else:  # Draw
         bet_team = "SERI"
         bet_label = "🤝 SERI"
-        opp_team = f"{home_team} vs {away_team}"
-        opp_label = ""
 
     # Odds minimum agar taruhan tetap menguntungkan secara statistik:
     # = 1 ÷ peluang_fair. Di bawah angka ini → tidak ada edge → JANGAN pasang.

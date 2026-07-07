@@ -19,7 +19,7 @@ except ImportError:
 # ── Bankroll & risk management ────────────────────────────────────────────────
 INITIAL_BANKROLL: float = 100_000.0
 KELLY_MULTIPLIER: float = 0.10
-MIN_VALUE_EDGE: float = 0.05
+MIN_VALUE_EDGE: float = 0.02
 MIN_BET_IDR: float = 2_000.0
 MAX_BET_IDR: float = 5_000.0
 # Catatan: bot TIDAK tahu hasil menang/kalah taruhan (tidak ada data settlement),
