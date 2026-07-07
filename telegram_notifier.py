@@ -107,8 +107,6 @@ def _format_signal_message(
 ) -> str:
     """Format a rich Telegram message for a value bet signal."""
     stake_url = _build_stake_link(sport_key)
-    emoji = _OUTCOME_EMOJI.get(outcome, "⚡")
-    label = _OUTCOME_LABEL.get(outcome, outcome)
     edge_pct = edge * 100
     ai_pct = ai_prob * 100
     implied_pct = (1 / odds) * 100
@@ -119,23 +117,54 @@ def _format_signal_message(
     kelly_str = f"Rp{kelly_stake:,.0f}"
     s_emoji = _sport_emoji(sport_key)
 
+    # Tentukan tim mana yang harus dipilih berdasarkan outcome
+    if outcome == "Home":
+        bet_team = home_team
+        bet_label = "🏠 KANDANG"
+        opp_team = away_team
+        opp_label = "✈️ TANDANG"
+    elif outcome == "Away":
+        bet_team = away_team
+        bet_label = "✈️ TANDANG"
+        opp_team = home_team
+        opp_label = "🏠 KANDANG"
+    else:  # Draw
+        bet_team = "SERI"
+        bet_label = "🤝 SERI"
+        opp_team = f"{home_team} vs {away_team}"
+        opp_label = ""
+
     lines = [
         f"{tag} TERDETEKSI!",
         "",
         f"{s_emoji} *{home_team}* vs *{away_team}*",
+        "━━━━━━━━━━━━━━━━━━━━",
         "",
-        f"{emoji} *Prediksi: {label}*",
-        f"💰 Odds terbaik pasar : `{odds:.2f}` _(ref: {platform})_",
-        f"📊 Peluang fair (AI)  : `{ai_pct:.1f}%`",
-        f"📉 Peluang tersirat   : `{implied_pct:.1f}%`",
-        f"📈 Edge               : `+{edge_pct:.1f}%`",
+        f"🎯 *PASANG TARUHAN PADA:*",
+        f"   *{bet_team}* ({bet_label})",
         "",
-        f"💵 *Rekomendasi Modal (Kelly):*",
-        f"   → {kelly_str}",
+        f"📋 *Susunan Tim:*",
+        f"   🏠 Kandang : {home_team}",
+        f"   ✈️  Tandang  : {away_team}",
         "",
-        f"🔗 [Cek di Stake]({stake_url})",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"💰 *Odds referensi pasar : `{odds:.2f}`*",
+        f"   _(dari {platform} — cek odds Stake sebelum pasang)_",
+        f"📊 Peluang menang (AI)  : `{ai_pct:.1f}%`",
+        f"📈 Edge (keunggulan)    : `+{edge_pct:.1f}%`",
         "",
-        "⚠️ _Cek apakah Stake menawarkan odds serupa, lalu pasang MANUAL._",
+        f"💵 *Modal yang disarankan:*",
+        f"   → *{kelly_str}*",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
+        f"📌 *Cara pasang di Stake:*",
+        f"   1. Buka → [Stake Sports]({stake_url})",
+        f"   2. Cari pertandingan *{home_team} vs {away_team}*",
+        f"   3. Pilih *{bet_team}* ({bet_label})",
+        f"   4. Pastikan odds Stake ≥ `{odds * 0.90:.2f}` sebelum pasang",
+        f"   5. Masukkan nominal *{kelly_str}* lalu konfirmasi",
+        "",
+        "⚠️ _Sinyal ini berdasarkan konsensus pasar. Odds Stake bisa berbeda._",
     ]
     return "\n".join(lines)
 
