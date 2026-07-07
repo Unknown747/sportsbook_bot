@@ -116,8 +116,8 @@ def _handle_skip(signal_id: str, chat_id, message_id: int, original_text: str) -
     logger.info("Sinyal %s dilewati oleh user.", signal_id)
 
 
-def _process_update(update: dict) -> None:
-    """Proses satu update dari Telegram (hanya callback_query yang ditangani)."""
+def _process_update(update: dict, scan_event: Optional[threading.Event] = None) -> None:
+    """Proses satu update dari Telegram (callback_query ditangani)."""
     callback = update.get("callback_query")
     if not callback:
         return
@@ -132,6 +132,15 @@ def _process_update(update: dict) -> None:
     if not data or chat_id is None or message_id is None:
         return
 
+    # ── Tombol "🔄 Scan Sekarang" — tidak pakai format "action:signal_id" ──
+    if data == "scan_now":
+        if scan_event is not None:
+            scan_event.set()
+            _answer_callback(callback_id, "⏳ Scan dimulai… hasil dikirim beberapa saat lagi.")
+        else:
+            _answer_callback(callback_id, "⚠️ Scan event tidak tersedia.")
+        return
+
     try:
         action, signal_id = data.split(":", 1)
     except ValueError:
@@ -140,8 +149,6 @@ def _process_update(update: dict) -> None:
 
     # Jawab callback SEBELUM menjalankan handler supaya tombol Telegram
     # berhenti loading segera (Telegram timeout callback setelah 10 detik).
-    # Teks ack sengaja netral ("Memproses…") karena persistence (file I/O)
-    # dan edit pesan belum tentu berhasil — status final tampil di pesan setelah handler selesai.
     if action == "placed":
         _answer_callback(callback_id, "⏳ Memproses…")
         _handle_placed(signal_id, chat_id, message_id, original_text)
@@ -152,7 +159,7 @@ def _process_update(update: dict) -> None:
         _answer_callback(callback_id, "Aksi tidak dikenal.")
 
 
-def _poll_loop(stop_event: threading.Event) -> None:
+def _poll_loop(stop_event: threading.Event, scan_event: Optional[threading.Event] = None) -> None:
     """Loop polling getUpdates (long polling) selama bot berjalan."""
     offset = 0
     backoff = _BACKOFF_START_SECONDS
@@ -176,25 +183,33 @@ def _poll_loop(stop_event: threading.Event) -> None:
         for update in response.get("result", []):
             offset = update["update_id"] + 1
             try:
-                _process_update(update)
+                _process_update(update, scan_event=scan_event)
             except Exception as exc:
                 logger.error("Error memproses update Telegram: %s", exc, exc_info=True)
 
 
-def start_listener() -> Optional[threading.Thread]:
+def start_listener(scan_event: Optional[threading.Event] = None) -> Optional[threading.Thread]:
     """
     Jalankan Telegram button listener di background thread (daemon).
-    Tidak melakukan apapun jika Telegram belum dikonfigurasi.
+
+    Args:
+        scan_event: threading.Event yang di-set saat user klik "🔄 Scan Sekarang".
+                    Main loop mendeteksi event ini dan menjalankan scan segera.
 
     Returns:
-        Thread object jika berhasil dijalankan, None jika dilewati.
+        Thread object jika berhasil dijalankan, None jika Telegram belum dikonfigurasi.
     """
     if not config.TELEGRAM_BOT_TOKEN or not config.TELEGRAM_CHAT_ID:
         logger.debug("Telegram belum dikonfigurasi — listener tombol dilewati.")
         return None
 
     stop_event = threading.Event()
-    thread = threading.Thread(target=_poll_loop, args=(stop_event,), daemon=True, name="telegram-listener")
+    thread = threading.Thread(
+        target=_poll_loop,
+        args=(stop_event, scan_event),
+        daemon=True,
+        name="telegram-listener",
+    )
     thread.stop_event = stop_event  # type: ignore[attr-defined]
     thread.start()
     return thread

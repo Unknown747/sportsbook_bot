@@ -12,12 +12,37 @@ Workflow:
 import json
 import logging
 import os
-import time
+import threading
 from datetime import date, datetime, timedelta, timezone
+from typing import List, Optional, Tuple
 
 # WIB = UTC+7 — konsisten dengan jam scan terjadwal.
 _WIB = timezone(timedelta(hours=7))
-from typing import List, Optional, Tuple
+
+# Event yang di-set oleh Telegram listener saat user klik tombol "🔄 Scan Sekarang".
+# Main loop menunggu event ini (bukan time.sleep) supaya scan mulai dalam hitungan detik.
+_manual_scan_event = threading.Event()
+
+# ── Deduplication: sinyal yang sama tidak dikirim 2x dalam 1 hari ─────────────
+_sent_signals_today: set = set()
+_sent_signals_date: Optional[date] = None
+
+
+def _is_signal_already_sent(match_id: str, outcome: str, today: date) -> bool:
+    """
+    Kembalikan True jika sinyal match_id+outcome sudah dikirim hari ini (WIB).
+    Sekaligus mendaftarkan sinyal baru ke set supaya pengecekan berikutnya tahu.
+    Set di-reset otomatis saat hari berganti.
+    """
+    global _sent_signals_today, _sent_signals_date
+    if _sent_signals_date != today:
+        _sent_signals_today = set()
+        _sent_signals_date = today
+    key = (match_id, outcome)
+    if key in _sent_signals_today:
+        return True
+    _sent_signals_today.add(key)
+    return False
 
 import bot_config as config
 from arbitrage_finder import scan_opportunities
@@ -279,6 +304,14 @@ def run_betting_cycle(
                     match_id, label, outcome, odds, stake,
                 )
 
+                # ── Deduplication: skip jika sinyal ini sudah dikirim hari ini ──
+                if _is_signal_already_sent(match_id, outcome, today):
+                    logger.info(
+                        "[%s] %s %s — sudah dikirim di siklus sebelumnya hari ini, skip.",
+                        match_id, outcome, label,
+                    )
+                    continue
+
                 # ── Kirim Telegram alert (taruhan dipasang MANUAL oleh user) ──
                 if float(edge) >= config.TELEGRAM_MIN_EDGE:
                     sent = send_value_bet_alert(
@@ -371,10 +404,10 @@ def main() -> None:
 
     _validate_config()
 
-    # Test koneksi Telegram saat startup
+    # Kirim notifikasi restart ke Telegram dan mulai listener tombol
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         test_telegram_connection()
-        start_listener()
+        start_listener(scan_event=_manual_scan_event)
 
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
@@ -385,27 +418,30 @@ def main() -> None:
         now_wib_hour = datetime.now(_WIB).hour
         due_hour = _get_due_scheduled_hour(scan_state)
 
+        # Cek apakah ada tombol "Scan Sekarang" yang ditekan dari Telegram
+        manual_trigger = _manual_scan_event.is_set()
+        if manual_trigger:
+            _manual_scan_event.clear()
+
+        run_scan = False
+        scan_label = ""
+
         if due_hour is not None:
             if due_hour != now_wib_hour:
                 logger.warning(
                     "Catch-up scan: jam %02d:00 WIB terlewat (kemungkinan bot baru "
-                    "restart) — menjalankan siklus sekarang supaya tidak diam-diam "
-                    "dilewati.",
+                    "restart) — menjalankan siklus sekarang.",
                     due_hour,
                 )
             logger.info("=== JAM SCAN (WIB %02d:00) — memulai siklus ===", due_hour)
             scan_state.setdefault("done_hours", []).append(due_hour)
             _save_scan_state(scan_state)
-            try:
-                current_bankroll, last_reset_date = run_betting_cycle(
-                    fetcher=fetcher,
-                    current_bankroll=current_bankroll,
-                    last_reset_date=last_reset_date,
-                )
-            except Exception as exc:
-                logger.critical("Error kritis di siklus utama: %s", exc, exc_info=True)
-
-            logger.info("Siklus selesai. Bankroll=Rp%.0f", current_bankroll)
+            scan_label = f"WIB {due_hour:02d}:00"
+            run_scan = True
+        elif manual_trigger:
+            logger.info("=== SCAN MANUAL — dipicu dari tombol Telegram ===")
+            scan_label = "MANUAL"
+            run_scan = True
         else:
             next_hours = [h for h in config.SCHEDULED_HOURS if h > now_wib_hour]
             next_h = next_hours[0] if next_hours else config.SCHEDULED_HOURS[0]
@@ -414,7 +450,21 @@ def main() -> None:
                 now_wib_hour, next_h,
             )
 
-        time.sleep(config.LOOP_INTERVAL_SECONDS)
+        if run_scan:
+            try:
+                current_bankroll, last_reset_date = run_betting_cycle(
+                    fetcher=fetcher,
+                    current_bankroll=current_bankroll,
+                    last_reset_date=last_reset_date,
+                )
+            except Exception as exc:
+                logger.critical("Error kritis di siklus utama: %s", exc, exc_info=True)
+            logger.info("Siklus [%s] selesai. Bankroll=Rp%.0f", scan_label, current_bankroll)
+
+        # Tunggu hingga LOOP_INTERVAL_SECONDS atau sampai tombol Scan ditekan —
+        # event.wait() lebih responsif dari time.sleep() karena bisa bangun lebih awal.
+        _manual_scan_event.wait(timeout=config.LOOP_INTERVAL_SECONDS)
+        _manual_scan_event.clear()
 
 
 if __name__ == "__main__":

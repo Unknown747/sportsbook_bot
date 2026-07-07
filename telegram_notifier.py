@@ -395,6 +395,12 @@ def send_daily_summary(
         "disable_web_page_preview": True,
     }
 
+    payload["reply_markup"] = {
+        "inline_keyboard": [
+            [{"text": "🔄 Scan Sekarang", "callback_data": "scan_now"}]
+        ]
+    }
+
     try:
         resp = requests.post(url, json=payload, timeout=10)
         return resp.status_code == 200 and resp.json().get("ok", False)
@@ -413,15 +419,23 @@ def test_telegram_connection() -> bool:
         logger.warning("TELEGRAM_BOT_TOKEN atau TELEGRAM_CHAT_ID belum diset.")
         return False
 
+    now_wib = datetime.now(timezone(timedelta(hours=7))).strftime("%d %b %Y, %H:%M WIB")
     url = TELEGRAM_API_BASE.format(token=config.TELEGRAM_BOT_TOKEN, method="sendMessage")
     payload = {
         "chat_id": config.TELEGRAM_CHAT_ID,
         "text": (
-            "✅ *Sportsbook Bot terhubung!*\n\n"
-            "Bot siap mengirim sinyal value bet ke HP kamu.\n"
-            "Taruhan dilakukan MANUAL — bot hanya memberi sinyal."
+            "🔁 *Sportsbook Bot — Restart / Online*\n\n"
+            f"🕐 Waktu: {now_wib}\n"
+            "✅ Bot aktif dan siap mengirim sinyal value bet.\n"
+            "Taruhan dilakukan *MANUAL* — bot hanya memberi sinyal.\n\n"
+            "Tekan tombol di bawah untuk scan manual kapan saja:"
         ),
         "parse_mode": "Markdown",
+        "reply_markup": {
+            "inline_keyboard": [
+                [{"text": "🔄 Scan Sekarang", "callback_data": "scan_now"}]
+            ]
+        },
     }
     try:
         resp = requests.post(url, json=payload, timeout=10)
