@@ -134,6 +134,10 @@ def _format_signal_message(
         opp_team = f"{home_team} vs {away_team}"
         opp_label = ""
 
+    # Odds minimum agar taruhan tetap menguntungkan secara statistik:
+    # = 1 ÷ peluang_fair. Di bawah angka ini → tidak ada edge → JANGAN pasang.
+    min_viable_odds = 1.0 / ai_prob if ai_prob > 0 else 0.0
+
     lines = [
         f"{tag} TERDETEKSI!",
         "",
@@ -149,7 +153,7 @@ def _format_signal_message(
         "",
         "━━━━━━━━━━━━━━━━━━━━",
         f"💰 *Odds referensi pasar : `{odds:.2f}`*",
-        f"   _(dari {platform} — cek odds Stake sebelum pasang)_",
+        f"   _(dari {platform} — ini odds terbaik di pasar, bukan odds Stake)_",
         f"📊 Peluang menang (AI)  : `{ai_pct:.1f}%`",
         f"📈 Edge (keunggulan)    : `+{edge_pct:.1f}%`",
         "",
@@ -157,14 +161,19 @@ def _format_signal_message(
         f"   → *{kelly_str}*",
         "",
         "━━━━━━━━━━━━━━━━━━━━",
+        f"🚦 *Cek odds Stake sebelum pasang:*",
+        f"   Cari *{bet_team}* di Stake (market: Pemenang/Moneyline)",
+        f"   ✅ PASANG jika odds Stake ≥ `{min_viable_odds:.2f}`",
+        f"   ❌ SKIP jika odds Stake < `{min_viable_odds:.2f}` (tidak ada keunggulan)",
+        "",
+        "━━━━━━━━━━━━━━━━━━━━",
         f"📌 *Cara pasang di Stake:*",
         f"   1. Buka → [Stake Sports]({stake_url})",
         f"   2. Cari pertandingan *{home_team} vs {away_team}*",
         f"   3. Pilih *{bet_team}* ({bet_label})",
-        f"   4. Pastikan odds Stake ≥ `{odds * 0.90:.2f}` sebelum pasang",
-        f"   5. Masukkan nominal *{kelly_str}* lalu konfirmasi",
+        f"   4. Masukkan nominal *{kelly_str}* lalu konfirmasi",
         "",
-        "⚠️ _Sinyal ini berdasarkan konsensus pasar. Odds Stake bisa berbeda._",
+        "⚠️ _Sinyal ini berdasarkan konsensus pasar. Selalu cek batas odds di atas._",
     ]
     return "\n".join(lines)
 
