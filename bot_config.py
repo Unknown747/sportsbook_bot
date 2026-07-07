@@ -74,6 +74,12 @@ ODDS_API_LOW_QUOTA_THRESHOLD: int = 15
 SCHEDULED_HOURS: list = [8, 14, 20]
 LOOP_INTERVAL_SECONDS: int = 600        # cek ulang setiap 10 menit
 
+# Kirim pengingat otomatis N jam sebelum pertandingan dimulai.
+# Contoh: 3 → notif dikirim ketika match tinggal ≤ 3 jam lagi.
+MATCH_REMINDER_HOURS_BEFORE: int = 3
+# Seberapa sering background thread memeriksa apakah ada match yang mau mulai.
+REMINDER_CHECK_INTERVAL_SECONDS: int = 900  # 15 menit
+
 # ── Telegram Alert ────────────────────────────────────────────────────────────
 # Dapatkan token dari @BotFather di Telegram, chat_id dari @userinfobot.
 TELEGRAM_BOT_TOKEN: str = os.environ.get("TELEGRAM_BOT_TOKEN", "")

@@ -24,7 +24,7 @@ import requests
 
 import bot_config as config
 from executor import append_bet_record
-from telegram_notifier import get_pending_signal, remove_pending_signal
+from telegram_notifier import get_pending_signal, remove_pending_signal, send_status_message
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +139,12 @@ def _process_update(update: dict, scan_event: Optional[threading.Event] = None) 
             _answer_callback(callback_id, "⏳ Scan dimulai… hasil dikirim beberapa saat lagi.")
         else:
             _answer_callback(callback_id, "⚠️ Scan event tidak tersedia.")
+        return
+
+    # ── Tombol "📊 Status" ──────────────────────────────────────────────────
+    if data == "status":
+        _answer_callback(callback_id, "📊 Mengambil status bot…")
+        send_status_message()
         return
 
     try:

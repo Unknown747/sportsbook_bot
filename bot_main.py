@@ -52,9 +52,11 @@ from fetcher import StakeFetcher
 from predictor import get_market_consensus_prediction
 from telegram_listener import start_listener
 from telegram_notifier import (
+    check_and_send_reminders,
     send_daily_summary,
     send_value_bet_alert,
     test_telegram_connection,
+    update_bot_state,
 )
 
 logging.basicConfig(
@@ -325,6 +327,7 @@ def run_betting_cycle(
                         sport_key=sport_key,
                         opp_type=opp_type,
                         platform=platform,
+                        commence_time_iso=match.get("commence_time", ""),
                     )
                     if sent:
                         signals_sent += 1
@@ -343,6 +346,20 @@ def run_betting_cycle(
         sport_skipped_no_consensus=sport_skipped_no_consensus,
         sport_skipped_no_value=sport_skipped_no_value,
         bankroll=current_bankroll,
+    )
+
+    # Update state bot supaya tombol 📊 Status menampilkan info terkini
+    now_wib = datetime.now(_WIB)
+    last_scan_label = now_wib.strftime("%d %b %H:%M WIB")
+    next_hours = [h for h in config.SCHEDULED_HOURS if h > now_wib.hour]
+    next_h = next_hours[0] if next_hours else config.SCHEDULED_HOURS[0]
+    update_bot_state(
+        last_scan_wib=last_scan_label,
+        next_scan_hour=next_h,
+        signals_this_cycle=signals_sent,
+        matches_today=len(matches),
+        bankroll=current_bankroll,
+        key_slots=len(config.ODDS_API_KEYS),
     )
 
     return current_bankroll, last_reset_date
@@ -390,10 +407,32 @@ def _validate_config() -> None:
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
+def _reminder_loop(stop_event: threading.Event) -> None:
+    """
+    Background thread — cek setiap REMINDER_CHECK_INTERVAL_SECONDS apakah ada
+    sinyal pending yang match-nya akan mulai dalam MATCH_REMINDER_HOURS_BEFORE jam.
+    Jika ya, kirim pengingat otomatis ke Telegram (1× per sinyal).
+    """
+    logger.info(
+        "⏰ Reminder thread aktif — cek setiap %d menit, kirim notif %d jam sebelum match.",
+        config.REMINDER_CHECK_INTERVAL_SECONDS // 60,
+        config.MATCH_REMINDER_HOURS_BEFORE,
+    )
+    while not stop_event.is_set():
+        try:
+            sent = check_and_send_reminders(hours_before=config.MATCH_REMINDER_HOURS_BEFORE)
+            if sent:
+                logger.info("⏰ %d reminder terkirim.", sent)
+        except Exception as exc:
+            logger.error("Error di reminder loop: %s", exc, exc_info=True)
+        stop_event.wait(timeout=config.REMINDER_CHECK_INTERVAL_SECONDS)
+
+
 def main() -> None:
     """
     Entry point — loop dengan jadwal scan terjadwal (default 08:00 / 14:00 / 20:00 WIB).
     Setiap 10 menit cek apakah sudah waktunya scan. Jika ya, jalankan siklus.
+    Thread terpisah mengirim pengingat otomatis sebelum match dimulai.
     """
     logger.info("=" * 60)
     logger.info("Sportsbook Prediction Bot — START")
@@ -404,10 +443,17 @@ def main() -> None:
 
     _validate_config()
 
-    # Kirim notifikasi restart ke Telegram dan mulai listener tombol
+    # Kirim notifikasi restart ke Telegram dan mulai listener + reminder thread
+    _reminder_stop = threading.Event()
     if config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID:
         test_telegram_connection()
         start_listener(scan_event=_manual_scan_event)
+        threading.Thread(
+            target=_reminder_loop,
+            args=(_reminder_stop,),
+            daemon=True,
+            name="reminder-loop",
+        ).start()
 
     fetcher = StakeFetcher()
     current_bankroll: float = config.INITIAL_BANKROLL
